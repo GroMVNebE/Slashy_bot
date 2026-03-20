@@ -5,7 +5,7 @@ import asyncio
 import asyncpg
 import discord
 from discord.ext import commands
-from utils import get_env
+from utils import *
 
 # Создаем папку для логов, если её нет
 if not os.path.exists('logs'):
@@ -60,7 +60,7 @@ class Bot(commands.Bot):
             intents=intents,
             help_command=None
         )
-        self.db_pool = None
+        self.db_pool: asyncpg.Pool | None = None
 
     async def setup_hook(self):
         # Создаём пул соединений с базой данных при запуске бота
@@ -69,6 +69,14 @@ class Bot(commands.Bot):
             logger.info("Успешное подключение к базе данных (～￣▽￣)～")
         except Exception as e:
             logger.error(f"Ошибка подключения к БД ＞﹏＜: {e}", exc_info=True)
+        # Проверяем, что пул соединений был успешно создан
+        if not self.db_pool:
+            logger.critical(
+                "Не удалось создать пул соединений с базой данных. Завершение работы.")
+            await self.close()
+            return
+        # Запускаем настройку базы данных (создание таблиц, если их нет)
+        await setup_database(self.db_pool)
 
         # Загружаем модули расширения
         for filename in os.listdir('./cogs'):

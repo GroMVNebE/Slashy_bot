@@ -209,3 +209,4 @@ __marimo__/
 # Additional ignores for this project
 logs/
 *.log
+test.py
