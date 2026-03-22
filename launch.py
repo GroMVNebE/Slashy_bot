@@ -44,7 +44,6 @@ TOKEN = get_env('DISCORD_TOKEN')
 DATABASE_URL = get_env('DATABASE_URL')
 CREATOR_ID = int(get_env('CREATOR_ID'))
 BOT_ID = int(get_env('BOT_ID'))
-MY_GUILD_ID = int(get_env('MY_GUILD_ID'))
 
 
 class Bot(commands.Bot):
@@ -89,9 +88,7 @@ class Bot(commands.Bot):
                         f"Ошибка загрузки модуля {filename}: {e}", exc_info=True)
 
         try:
-            MY_GUILD = discord.Object(id=MY_GUILD_ID)
-            self.tree.copy_global_to(guild=MY_GUILD)
-            synced = await self.tree.sync(guild=MY_GUILD)
+            synced = await self.tree.sync()
             logger.info(f"Синхронизировано команд: {len(synced)}")
         except Exception as e:
             logger.error(f"Ошибка синхронизации: {e}")
