@@ -3,8 +3,13 @@
 
 ## Установка 🛠️
 1. Склонируйте репозиторий
-`git clone https://github.com/GroMVNebE/Slashy_bot.git`
-2. Установите зависимости `pip install -r requirements.txt`
+```
+git clone https://github.com/GroMVNebE/Slashy_bot.git
+```
+2. Установите зависимости
+```
+pip install -r requirements.txt
+```
 3. Создайте файл конфигурации `.env`
 ```
 DISCORD_TOKEN=Токен_Вашего_бота
@@ -12,7 +17,10 @@ DATABASE_URL=URL_для_подключения_базы_данных_PostgreSQL
 CREATOR_ID=Ваш_Discord_ID
 BOT_ID=Discord_ID_бота
 ```
-4. Запустите бота `python launch.py`
+4. Запустите бота
+```
+python launch.py
+```
 ## Текущий функционал ⚙️
 - Поддержка слеш-команд Discord 
 - Начисляет пользователям опыт за активность (отправку сообщений)
