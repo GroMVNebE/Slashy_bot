@@ -125,7 +125,7 @@ def create_embed(
     author_name: str | None = None,
     author_icon: str | None = None,
     fields: List[Dict[str, Any]] | None = None,
-    timestamp: bool = False,
+    timestamp: bool = True,
 ) -> discord.Embed:
     """Универсальная функция для создания Embed
 
@@ -139,8 +139,8 @@ def create_embed(
         footer_icon (str | None, optional): URL иконки нижней части Embed. По умолчанию имеет значение None.
         author_name (str | None, optional): Имя автора. По умолчанию имеет значение None.
         author_icon (str | None, optional): URL иконки автора. По умолчанию имеет значение None.
-        fields (List[Dict[str, Any]] | None, optional): Поля с содержимым в формате {"name": "...", "value": "...", "inline": True | False}. Defaults to None.
-        timestamp (bool, optional): Временная метка (если имеет значение True, в Embed будет добавлено текущее время). Defaults to False.
+        fields (List[Dict[str, Any]] | None, optional): Поля с содержимым в формате {"name": "...", "value": "...", "inline": True | False}. По умолчанию имеет значение None.
+        timestamp (bool, optional): Временная метка (если имеет значение True, в Embed будет добавлено текущее время). По умолчанию имеет значение True.
 
     Returns:
         discord.Embed: Созданный Embed с заданными параметрами
