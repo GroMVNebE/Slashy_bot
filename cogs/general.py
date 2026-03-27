@@ -160,23 +160,6 @@ class General(commands.Cog):
             )
             return
 
-    @lvl.error
-    async def lvl_error(
-        self, interaction: discord.Interaction, error: app_commands.AppCommandError
-    ):
-        if isinstance(error, app_commands.CommandOnCooldown):
-            # Создаём embed с информацией о том, сколько осталось ждать до повторного использования команды
-            embed = create_embed(
-                title="Подождите перед повторным использованием команды",
-                description=f"Подождите ещё **{error.retry_after:.1f} сек.** перед повторным использованием команды",
-                color=discord.Color.red(),
-            )
-            # Отправляем пользователю сообщение
-            await interaction.response.send_message(
-                embed=embed,
-                ephemeral=True,
-            )
-
 
 async def setup(bot):
     await bot.add_cog(General(bot))

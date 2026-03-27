@@ -54,6 +54,8 @@ class Bot(commands.Bot):
         self.db_pool: asyncpg.Pool | None = None
 
     async def setup_hook(self):
+        # Устанавливаем обработчик ошибок для всех слэш-команд
+        self.tree.on_error = self.on_tree_error
         # Создаём пул соединений с базой данных при запуске бота
         try:
             self.db_pool = await asyncpg.create_pool(dsn=DATABASE_URL)
@@ -92,6 +94,25 @@ class Bot(commands.Bot):
         if self.db_pool:
             await self.db_pool.close()
         await super().close()
+
+    async def on_tree_error(
+        self,
+        interaction: discord.Interaction,
+        error: discord.app_commands.AppCommandError,
+    ):
+        # Проверяем, является ли ошибка кулдауном
+        if isinstance(error, discord.app_commands.CommandOnCooldown):
+            # Создаём embed с информацией о том, сколько осталось ждать до повторного использования команды
+            embed = create_embed(
+                title="Подождите перед повторным использованием команды",
+                description=f"Подождите ещё **{error.retry_after:.1f} сек.** перед повторным использованием команды",
+                color=discord.Color.red(),
+            )
+            # Отправляем пользователю сообщение
+            await interaction.response.send_message(
+                embed=embed,
+                ephemeral=True,
+            )
 
 
 async def main():
