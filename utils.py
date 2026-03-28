@@ -38,6 +38,13 @@ CREATE TABLE IF NOT EXISTS user_levels (
     level INTEGER DEFAULT 1,
     PRIMARY KEY (guild_id, user_id)
 );
+CREATE TABLE IF NOT EXISTS guess_number (
+    guild_id BIGINT,
+    user_id BIGINT,
+    number INTEGER,
+    tries INTEGER DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id)
+);
 """
 
 

@@ -1,4 +1,5 @@
 import aiohttp
+import asyncpg
 import discord
 import logging
 import io
@@ -7,6 +8,7 @@ from discord import app_commands
 from discord.ext import commands
 from typing import TYPE_CHECKING
 from utils import create_embed
+from random import randint
 
 if TYPE_CHECKING:
     from launch import Bot
@@ -37,8 +39,13 @@ class General(commands.Cog):
             logger.warning(
                 "Пул соединений с базой данных не инициализирован. Пропуск обработки сообщения"
             )
+            embed = create_embed(
+                title="Ошибка!",
+                description=f"В процессе создания карточки с Вашим уровнем произошла ошибка. Пожалуйста, попробуйте позже",
+                color=discord.Color.red(),
+            )
             await interaction.response.send_message(
-                "Произошла ошибка при создании карточки с Вашим уровнем. Пожалуйста, попробуйте позже",
+                embed=embed,
                 ephemeral=True,
             )
             return
@@ -61,13 +68,11 @@ class General(commands.Cog):
                     xp, lvl = 0, 1
                     await connection.execute(
                         """
-                        INSERT INTO user_levels (guild_id, user_id, xp, level)
-                        VALUES ($1, $2, $3, $4)
+                        INSERT INTO user_levels (guild_id, user_id)
+                        VALUES ($1, $2)
                     """,
                         interaction.guild_id,
                         user.id,
-                        xp,
-                        lvl,
                     )
                 else:
                     xp, lvl = row["xp"], row["level"]
@@ -75,9 +80,12 @@ class General(commands.Cog):
             logger.error(
                 f"Ошибка при получении данных об уровне из БД: {e}", exc_info=True
             )
-            await interaction.followup.send(
-                "Произошла ошибка при создании карточки с Вашим уровнем. Пожалуйста, попробуйте позже"
+            embed = create_embed(
+                title="Ошибка!",
+                description=f"В процессе создания карточки с Вашим уровнем произошла ошибка. Пожалуйста, попробуйте позже",
+                color=discord.Color.red(),
             )
+            await interaction.followup.send(embed=embed)
             return
         # Вычисляем прогресс до следующего уровня
         required_xp = 80 * lvl + 20 * lvl**2
@@ -100,9 +108,12 @@ class General(commands.Cog):
                 logger.error(
                     f"Не удалось загрузить аватар пользователя {user.id}", exc_info=True
                 )
-                await interaction.followup.send(
-                    "Произошла ошибка при создании карточки с Вашим уровнем. Пожалуйста, попробуйте позже"
+                embed = create_embed(
+                    title="Ошибка!",
+                    description=f"В процессе создания карточки с Вашим уровнем произошла ошибка. Пожалуйста, попробуйте позже",
+                    color=discord.Color.red(),
                 )
+                await interaction.followup.send(embed=embed)
                 return
             ava = ava.resize(size=[65, 65])
             bg.paste(ava, (90, 138))
@@ -155,10 +166,225 @@ class General(commands.Cog):
             ava_buff.close()
         except Exception as e:
             logger.error(f"Ошибка при генерации карточки уровня: {e}", exc_info=True)
-            await interaction.followup.send(
-                "Произошла ошибка при создании карточки с Вашим уровнем. Пожалуйста, попробуйте позже"
+            embed = create_embed(
+                title="Ошибка!",
+                description=f"В процессе создания карточки с Вашим уровнем произошла ошибка. Пожалуйста, попробуйте позже",
+                color=discord.Color.red(),
             )
+            await interaction.followup.send(embed=embed)
             return
+
+    class GuessModal(discord.ui.Modal, title="Угадай число"):
+        """Модальное окно для ввода числа в мини-игре "Угадай число" """
+
+        # Создаём текстовое поле для ввода числа
+        guess_input = discord.ui.TextInput(
+            label="Введите число от 1 до 1000",
+            style=discord.TextStyle.short,
+            placeholder="500",
+            required=True,
+            min_length=1,
+            max_length=4,
+        )
+
+        def __init__(self, view: "General.GuessView"):
+            super().__init__()
+            # Сохраняем ссылку на View, чтобы обновлять его
+            self.view = view
+
+        async def on_submit(self, interaction: discord.Interaction):
+            # Проверяем, что пользователь ввёл число
+            if not self.guess_input.value.isdigit():
+                embed = create_embed(
+                    title="Некорректный ввод!",
+                    description="Пожалуйста, введите целое число от 1 до 1000",
+                    color=discord.Color.red(),
+                )
+                await interaction.response.edit_message(embed=embed, view=self.view)
+                return
+
+            guess = int(self.guess_input.value)
+            pool = self.view.pool
+            user_id = interaction.user.id
+            guild_id = interaction.guild_id
+
+            try:
+                async with pool.acquire() as connection:
+                    # Увеличиваем счетчик попыток в БД
+                    await connection.execute(
+                        "UPDATE guess_number SET tries = tries + 1 WHERE guild_id = $1 AND user_id = $2",
+                        guild_id,
+                        user_id,
+                    )
+
+                    # Получаем актуальные данные
+                    row = await pool.fetchrow(
+                        "SELECT number, tries FROM guess_number WHERE guild_id = $1 AND user_id = $2",
+                        guild_id,
+                        user_id,
+                    )
+                    target = row["number"]
+                    tries = row["tries"]
+
+                    # Проверяем победу
+                    if guess == target:
+                        # Удаляем данные об игре из БД, так как она закончилась
+                        await pool.execute(
+                            "DELETE FROM guess_number WHERE guild_id = $1 AND user_id = $2",
+                            guild_id,
+                            user_id,
+                        )
+                        embed = create_embed(
+                            title="Вы угадали!",
+                            description=f"Вы отгадали число **{target}** за **{tries}** попыток",
+                            color=discord.Color.green(),
+                        )
+                        self.view.stop()  # Останавливаем работу View
+                        await interaction.response.edit_message(embed=embed, view=None)
+                        return
+
+                    # Создаём подсказку
+                    current_direction = (
+                        "Загаданное число больше"
+                        if target > guess
+                        else "Загаданное число меньше"
+                    )
+                    # Добавляем в подсказку точки, чтобы при повторных ошибках
+                    # Ответ бота отличался
+                    if current_direction == self.view.last_direction:
+                        if self.view.dots < 3:
+                            self.view.dots += 1
+                        else:
+                            self.view.dots = 0
+                    else:
+                        self.view.last_direction = current_direction
+                        self.view.dots = 0
+                    dots_str = "." * self.view.dots
+                    # Отправляем подсказку пользователю
+                    embed = create_embed(
+                        title="Не угадали!",
+                        description=f"{current_direction}{dots_str}",
+                        color=discord.Color.orange(),
+                        footer_text=f"Попыток: {tries}",
+                    )
+                    await interaction.response.edit_message(embed=embed, view=self.view)
+            except Exception as e:
+                logger.error(
+                    f"Ошибка при обработке попытки в игре guess: {e}", exc_info=True
+                )
+                embed = create_embed(
+                    title="Ошибка!",
+                    description="Произошла ошибка при обработке введённого значения. Пожалуйста, попробуйте снова.",
+                    color=discord.Color.red(),
+                )
+                await interaction.response.edit_message(embed=embed, view=self.view)
+
+    class GuessView(discord.ui.View):
+        """UI-представление для мини-игры "Угадай число", содержащее кнопку для открытия модального окна ввода числа"""
+
+        def __init__(self, pool: asyncpg.Pool, interaction: discord.Interaction):
+            super().__init__(timeout=300)
+            self.pool = pool
+            self.initial_interaction = interaction
+
+            # Переменные состояния для логики точек (хранятся в памяти)
+            self.last_direction: str | None = None
+            self.dots = 0
+
+        async def on_timeout(self):
+            # По истечении тайм-аута пробуем удалить исходное сообщение
+            try:
+                await self.initial_interaction.delete_original_response()
+            except discord.NotFound:
+                pass
+            except Exception as e:
+                logger.error(
+                    f"Ошибка при удалении сообщения по тайм-ауту: {e}", exc_info=True
+                )
+
+        @discord.ui.button(
+            label="Ввести число", style=discord.ButtonStyle.primary, emoji="1️⃣"
+        )
+        async def guess_button(
+            self, interaction: discord.Interaction, button: discord.ui.Button
+        ):
+            # При нажатии открываем модальное окно для ввода числа
+            await interaction.response.send_modal(General.GuessModal(self))
+
+    @app_commands.command(name="guess", description='Мини-игра "Угадай число"')
+    @app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.guild_id, i.user.id))
+    async def guess(self, interaction: discord.Interaction):
+        """Мини-игра "Угадай число", в которой бот загадывает число от 1 до 1000,
+        а пользователь пытается его угадать, получая подсказки "Больше" или "Меньше"
+
+        Args:
+            interaction (discord.Interaction): Объект взаимодействия, содержащий подробные данные об отправленной команде
+        """
+        pool = self.bot.db_pool
+        if not pool:
+            logger.warning(
+                "Пул соединений с базой данных не инициализирован. Пропуск обработки команды guess"
+            )
+            embed = create_embed(
+                title="Ошибка!",
+                description="Произошла ошибка в процессе запуска игры. Пожалуйста, попробуйте позже",
+                color=discord.Color.red(),
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        user_id = interaction.user.id
+        guild_id = interaction.guild_id
+        try:
+            async with pool.acquire() as connection:
+                # Пробуем получить данные об активной игре пользователя
+                row = await connection.fetchrow(
+                    "SELECT number FROM guess_number WHERE guild_id = $1 AND user_id = $2",
+                    guild_id,
+                    user_id,
+                )
+                # Если нет активной игры - создаём новую
+                if not row:
+                    target_number = randint(1, 1000)
+                    await pool.execute(
+                        """
+                        INSERT INTO guess_number (guild_id, user_id, number, tries)
+                        VALUES ($1, $2, $3, 0)
+                        """,
+                        guild_id,
+                        user_id,
+                        target_number,
+                    )
+                    message = (
+                        "Загадано число от 1 до 1000. Попробуйте угадать ~(=^‥^)ノ"
+                    )
+                    tries = 0
+                # Если игра уже есть - получаем нужные данные для продолжения
+                # И создаём соответствующее сообщение
+                else:
+                    message = (
+                        "У Вас уже есть загаданное число. Пробуйте угадывать дальше"
+                    )
+                    tries = row["tries"]
+
+                # Отправляем пользователю сообщение о начале игры с кнопкой для ввода числа
+                embed = create_embed(
+                    title="Попробуйте угадать число!",
+                    description=message,
+                    color=discord.Color.blue(),
+                    footer_text=f"Текущих попыток: {tries}",
+                )
+                view = General.GuessView(pool, interaction)
+                await interaction.response.send_message(
+                    embed=embed, view=view, ephemeral=True
+                )
+        except Exception as e:
+            logger.error(f"Ошибка при запуске игры guess: {e}", exc_info=True)
+            embed = create_embed(
+                title="Ошибка!",
+                description="Произошла ошибка в процессе запуска игры. Пожалуйста, попробуйте позже",
+                color=discord.Color.red(),
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot):
