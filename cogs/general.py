@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw, ImageFont
 from discord import app_commands
 from discord.ext import commands
 from typing import TYPE_CHECKING
-from utils import create_embed
+from utils import create_embed, add_xp
 from random import randint
 
 if TYPE_CHECKING:
@@ -203,12 +203,22 @@ class General(commands.Cog):
                 )
                 await interaction.response.edit_message(embed=embed, view=self.view)
                 return
-
+            # Получаем данные для обработки ввода
             guess = int(self.guess_input.value)
+            # Проверяем, что число в допустимых пределах
+            if guess < 1 or guess > 1000:
+                embed = create_embed(
+                    title="Некорректный ввод!",
+                    description="Пожалуйста, введите целое число от 1 до 1000",
+                    color=discord.Color.red(),
+                )
+                await interaction.response.edit_message(embed=embed, view=self.view)
+                return
             pool = self.view.pool
             user_id = interaction.user.id
             guild_id = interaction.guild_id
-
+            # Смотрим, угадал ли пользователь число
+            # Если нет - выводим подсказку
             try:
                 async with pool.acquire() as connection:
                     # Увеличиваем счетчик попыток в БД
@@ -240,6 +250,15 @@ class General(commands.Cog):
                             description=f"Вы отгадали число **{target}** за **{tries}** попыток",
                             color=discord.Color.green(),
                         )
+                        # Начисляем опыт за победу
+                        if interaction.guild:
+                            # Вычисляем количество опыта, которое будет начислено пользователю
+                            # Оно плавно убывает с каждой попыткой, но не может быть меньше 30
+                            # И всегда оканчивается на 0
+                            # (300 -> 180 -> 140 -> 110 -> 90 -> 80 -> 70.. -> 60.. -> 50.. -> 40.. -> 30..)
+                            base = 300 // tries**0.75
+                            xp = max((base + 9) // 10 * 10, 30)
+                            await add_xp(user_id=interaction.user.id, guild_id=interaction.guild.id, xp=xp, pool=pool)
                         self.view.stop()  # Останавливаем работу View
                         await interaction.response.edit_message(embed=embed, view=None)
                         return
@@ -250,21 +269,10 @@ class General(commands.Cog):
                         if target > guess
                         else "Загаданное число меньше"
                     )
-                    # Добавляем в подсказку точки, чтобы при повторных ошибках
-                    # Ответ бота отличался
-                    if current_direction == self.view.last_direction:
-                        if self.view.dots < 3:
-                            self.view.dots += 1
-                        else:
-                            self.view.dots = 0
-                    else:
-                        self.view.last_direction = current_direction
-                        self.view.dots = 0
-                    dots_str = "." * self.view.dots
                     # Отправляем подсказку пользователю
                     embed = create_embed(
                         title="Не угадали!",
-                        description=f"{current_direction}{dots_str}",
+                        description=f"{current_direction} чем **{guess}**",
                         color=discord.Color.orange(),
                         footer_text=f"Попыток: {tries}",
                     )
@@ -287,10 +295,6 @@ class General(commands.Cog):
             super().__init__(timeout=300)
             self.pool = pool
             self.initial_interaction = interaction
-
-            # Переменные состояния для логики точек (хранятся в памяти)
-            self.last_direction: str | None = None
-            self.dots = 0
 
         async def on_timeout(self):
             # По истечении тайм-аута пробуем удалить исходное сообщение
