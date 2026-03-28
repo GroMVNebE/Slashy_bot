@@ -391,6 +391,44 @@ class General(commands.Cog):
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    @app_commands.command(name="rand", description="Генерирует случайное число в заданном диапазоне")
+    @app_commands.describe(
+        мин="Начало диапазона",
+        макс="Конец диапазона"
+    )
+    @app_commands.checks.cooldown(1, 1.5, key=lambda i: (i.guild_id, i.user.id))
+    async def rand(self, interaction: discord.Interaction, мин: int, макс: int):
+        """Команда для генерации случайного числа в заданном диапазоне.
+        Пользователь вводит два числа - начало и конец диапазона, а бот генерирует число между ними и отправляет результат пользователю
+
+        Args:
+            interaction (discord.Interaction): Объект взаимодействия, содержащий подробные данные об отправленной команде
+            мин (int): Начало диапазона для генерации случайного числа
+            макс (int): Конец диапазона для генерации случайного числа
+        """
+        # Проверяем, если начало и конец диапазона совпадают
+        if мин == макс:
+            embed = create_embed(
+                title="Некорректный ввод!",
+                description="Начало и конец диапазона не могут совпадать. Пожалуйста, введите разные числа.",
+                color=discord.Color.red(),
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        # Сохраняем значения в правильном порядке
+        # И генерируем случайное число в заданном диапазоне
+        start = min(мин, макс)
+        end = max(мин, макс)
+        result = randint(start, end)
+        # Отправляем пользователю результат
+        embed = create_embed(
+            title="Сгенерировано случайное число!",
+            description=f":game_die:    **{result}**    :game_die:",
+            color=discord.Color.green(),
+            footer_text=f"Диапазон: [{start}; {end}]",
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 async def setup(bot):
     await bot.add_cog(General(bot))
