@@ -165,7 +165,8 @@ class General(commands.Cog):
             buff.close()
             ava_buff.close()
         except Exception as e:
-            logger.error(f"Ошибка при генерации карточки уровня: {e}", exc_info=True)
+            logger.error(
+                f"Ошибка при генерации карточки уровня: {e}", exc_info=True)
             embed = create_embed(
                 title="Ошибка!",
                 description=f"В процессе создания карточки с Вашим уровнем произошла ошибка. Пожалуйста, попробуйте позже",

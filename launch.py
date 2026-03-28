@@ -12,7 +12,8 @@ if not os.path.exists("logs"):
     os.makedirs("logs")
 
 # Настраиваем формат: [Дата Время] [Уровень] [Имя_модуля]: Сообщение
-log_formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s: %(message)s")
+log_formatter = logging.Formatter(
+    "%(asctime)s | %(levelname)s | %(name)s: %(message)s")
 
 # Настраиваем обработчик для файлов с ротацией по дате
 # Ротация будет происходить каждый день в полночь, сохранять 30 последних файлов логов и добавлять дату к имени файла
@@ -31,7 +32,8 @@ console_handler = logging.StreamHandler()
 console_handler.setFormatter(log_formatter)
 
 # Инициализируем логгер
-logging.basicConfig(level=logging.DEBUG, handlers=[file_handler, console_handler])
+logging.basicConfig(level=logging.WARNING, handlers=[
+                    file_handler, console_handler])
 
 logger = logging.getLogger("slashy")
 
