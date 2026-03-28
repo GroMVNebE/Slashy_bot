@@ -91,14 +91,16 @@ async def add_xp(user_id: int, guild_id: int, xp: int, pool: asyncpg.Pool):
             curr_xp = row["xp"]
             curr_level = row["level"]
             # Вычисляем требуемый опыт для следующего уровня
-            required_xp = 80 * curr_level + 20 * curr_level**2
+            required_xp = (
+                int(100 * curr_level + 50 * curr_level**1.688) + 9) // 10 * 10
             # Поднимаем уровень пользователя, если опыта достаточно
             level_up = False
             while curr_xp >= required_xp:
                 # Поднимаем уровень пользователя, отнимая требуемый опыт
                 curr_xp -= required_xp
                 curr_level += 1
-                required_xp = 80 * curr_level + 20 * curr_level**2
+                required_xp = (
+                    int(100 * curr_level + 50 * curr_level**1.688) + 9) // 10 * 10
                 level_up = True
             # Обновляем уровень и оставшийся опыт в базе данных, если уровень был повышен
             if level_up:
