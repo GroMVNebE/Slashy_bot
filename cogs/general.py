@@ -29,7 +29,9 @@ class General(commands.Cog):
     @app_commands.command(name="lvl", description="Выводит Ваш текущий уровень")
     @app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.guild_id, i.user.id))
     async def lvl(self, interaction: discord.Interaction):
-        """Выводит уровень и опыт пользователя, оформленный в embed-изображении
+        """### Выводит данные об уровне и опыте пользователя
+        Выводит карточку с аватаром, никнеймом, уровнем, опытом и прогрессом до следующего уровня пользователя,
+        вызвавшего команду
 
         Args:
             interaction (discord.Interaction): Объект взаимодействия, содержащий подробные данные об отправленной команде
@@ -176,7 +178,9 @@ class General(commands.Cog):
             return
 
     class GuessModal(discord.ui.Modal, title="Угадай число"):
-        """Модальное окно для ввода числа в мини-игре "Угадай число" """
+        """### Модальное окно для ввода числа в мини-игре "Угадай число"
+        Получает от пользователя строку от 1 до 4 символов, валидирует её и 
+        обрабатывает попытку угадать число, выдавая подсказки и обновляя состояние игры"""
 
         # Создаём текстовое поле для ввода числа
         guess_input = discord.ui.TextInput(
@@ -289,7 +293,8 @@ class General(commands.Cog):
                 await interaction.response.edit_message(embed=embed, view=self.view)
 
     class GuessView(discord.ui.View):
-        """UI-представление для мини-игры "Угадай число", содержащее кнопку для открытия модального окна ввода числа"""
+        """### UI-представление для мини-игры "Угадай число" 
+        Содержит кнопку для открытия модального окна ввода числа"""
 
         def __init__(self, pool: asyncpg.Pool, interaction: discord.Interaction):
             super().__init__(timeout=300)
@@ -319,8 +324,8 @@ class General(commands.Cog):
     @app_commands.command(name="guess", description='Мини-игра "Угадай число"')
     @app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.guild_id, i.user.id))
     async def guess(self, interaction: discord.Interaction):
-        """Мини-игра "Угадай число", в которой бот загадывает число от 1 до 1000,
-        а пользователь пытается его угадать, получая подсказки "Больше" или "Меньше"
+        """### Мини-игра "Угадай число". 
+        Бот загадывает число от 1 до 1000, а пользователь пытается его угадать, получая подсказки "Больше" или "Меньше"
 
         Args:
             interaction (discord.Interaction): Объект взаимодействия, содержащий подробные данные об отправленной команде
@@ -398,7 +403,7 @@ class General(commands.Cog):
     )
     @app_commands.checks.cooldown(1, 1.5, key=lambda i: (i.guild_id, i.user.id))
     async def rand(self, interaction: discord.Interaction, мин: int, макс: int):
-        """Команда для генерации случайного числа в заданном диапазоне.
+        """### Команда для генерации случайного числа в заданном диапазоне.
         Пользователь вводит два числа - начало и конец диапазона, а бот генерирует число между ними и отправляет результат пользователю
 
         Args:
