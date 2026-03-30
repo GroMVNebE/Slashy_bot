@@ -4,9 +4,12 @@ import logging
 from utils import add_xp
 from typing import TYPE_CHECKING
 
+# Подлючаем типизацию для класса Bot из launch.py, избегая циклического импорта
+# Нужно для правильного определения типов в IDE
 if TYPE_CHECKING:
     from launch import Bot
 
+# Инициализируем логгер для этого модуля
 logger = logging.getLogger('slashy.events')
 
 

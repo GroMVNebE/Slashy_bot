@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 from utils import create_embed, add_xp
 from random import randint
 
+# Подлючаем типизацию для класса Bot из launch.py, избегая циклического импорта
+# Нужно для правильного определения типов в IDE
 if TYPE_CHECKING:
     from launch import Bot
 
