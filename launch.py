@@ -40,8 +40,6 @@ logger = logging.getLogger("slashy")
 # Получаем переменные окружения
 TOKEN = get_env("DISCORD_TOKEN")
 DATABASE_URL = get_env("DATABASE_URL")
-CREATOR_ID = int(get_env("CREATOR_ID"))
-BOT_ID = int(get_env("BOT_ID"))
 
 
 class Bot(commands.Bot):
