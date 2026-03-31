@@ -42,6 +42,9 @@ class General(commands.Cog):
         Args:
             interaction (discord.Interaction): Объект взаимодействия, содержащий подробные данные об отправленной команде
         """
+        # Логгируем данные для отладки и анализа
+        logger.info(
+            f'{interaction.user.display_name} запросил карточку со своим уровнем')
         # Проверяем, что пул соединений с базой данных инициализирован
         if not self.bot.db_pool:
             logger.warning(
@@ -172,6 +175,9 @@ class General(commands.Cog):
             # Закрываем буфер после отправки, чтобы освободить память
             buff.close()
             ava_buff.close()
+            # Логгируем данные для отладки и анализа
+            logger.info(
+                f'{interaction.user.display_name} получил карточку со своим уровнем (уровень {lvl}, опыт {xp}/{required_xp})')
         except Exception as e:
             logger.error(
                 f"Ошибка при генерации карточки уровня: {e}", exc_info=True)
@@ -206,6 +212,8 @@ class General(commands.Cog):
         async def on_submit(self, interaction: discord.Interaction):
             # Проверяем, что пользователь ввёл число
             if not self.guess_input.value.isdigit():
+                logger.warning(
+                    f'{interaction.user.display_name} ввёл некорректное значение в игре guess: {self.guess_input.value}')
                 embed = create_embed(
                     title="Некорректный ввод!",
                     description="Пожалуйста, введите целое число от 1 до 1000",
@@ -217,6 +225,8 @@ class General(commands.Cog):
             guess = int(self.guess_input.value)
             # Проверяем, что число в допустимых пределах
             if guess < 1 or guess > 1000:
+                logger.warning(
+                    f'{interaction.user.display_name} ввёл число вне допустимого диапазона в игре guess: {guess}')
                 embed = create_embed(
                     title="Некорректный ввод!",
                     description="Пожалуйста, введите целое число от 1 до 1000",
@@ -269,6 +279,9 @@ class General(commands.Cog):
                             base = 300 // tries**0.75
                             xp = max((base + 9) // 10 * 10, 30)
                             await add_xp(user_id=interaction.user.id, guild_id=interaction.guild.id, xp=xp, pool=pool)
+                            # Логгируем данные для отладки и анализа
+                            logger.info(
+                                f'Пользователь {interaction.user.display_name} угадал число {target} за {tries} попыток и получил {xp} XP')
                         self.view.stop()  # Останавливаем работу View
                         await interaction.response.edit_message(embed=embed, view=None)
                         return
@@ -287,6 +300,9 @@ class General(commands.Cog):
                         footer_text=f"Попыток: {tries}",
                     )
                     await interaction.response.edit_message(embed=embed, view=self.view)
+                    # Логгируем данные для отладки и анализа
+                    logger.info(
+                        f'Пользователь {interaction.user.display_name} сделал попытку угадать число {target}: {current_direction} чем {guess}. Попыток: {tries}')
             except Exception as e:
                 logger.error(
                     f"Ошибка при обработке попытки в игре guess: {e}", exc_info=True
@@ -310,6 +326,7 @@ class General(commands.Cog):
         async def on_timeout(self):
             # По истечении тайм-аута пробуем удалить исходное сообщение
             try:
+                logger.info("Время игры \"Угадай число\" истекло")
                 await self.initial_interaction.delete_original_response()
             except discord.NotFound:
                 pass
@@ -354,7 +371,7 @@ class General(commands.Cog):
             async with pool.acquire() as connection:
                 # Пробуем получить данные об активной игре пользователя
                 row = await connection.fetchrow(
-                    "SELECT number FROM guess_number WHERE guild_id = $1 AND user_id = $2",
+                    "SELECT number, tries FROM guess_number WHERE guild_id = $1 AND user_id = $2",
                     guild_id,
                     user_id,
                 )
@@ -374,6 +391,9 @@ class General(commands.Cog):
                         "Загадано число от 1 до 1000. Попробуйте угадать ~(=^‥^)ノ"
                     )
                     tries = 0
+                    # Логгируем данные для отладки и анализа
+                    logger.info(
+                        f'Для пользователя {interaction.user.display_name} была создана игра "Угадай число" с загаданным числом {target_number}')
                 # Если игра уже есть - получаем нужные данные для продолжения
                 # И создаём соответствующее сообщение
                 else:
@@ -381,7 +401,9 @@ class General(commands.Cog):
                         "У Вас уже есть загаданное число. Пробуйте угадывать дальше"
                     )
                     tries = row["tries"]
-
+                    # Логгируем данные для отладки и анализа
+                    logger.info(
+                        f'Пользователь {interaction.user.display_name} продолжает игру "Угадай число". Загаданное число {row["number"]}, попыток {tries}')
                 # Отправляем пользователю сообщение о начале игры с кнопкой для ввода числа
                 embed = create_embed(
                     title="Попробуйте угадать число!",
@@ -417,8 +439,12 @@ class General(commands.Cog):
             мин (int): Начало диапазона для генерации случайного числа
             макс (int): Конец диапазона для генерации случайного числа
         """
+        logger.info(
+            f'{interaction.user.display_name} запросил генерацию случайного числа в диапазоне [{мин}; {макс}]')
         # Проверяем, если начало и конец диапазона совпадают
         if мин == макс:
+            logger.warning(
+                f'{interaction.user.display_name} ввёл одинаковые числа для диапазона в команде rand [{мин}; {макс}]')
             embed = create_embed(
                 title="Некорректный ввод!",
                 description="Начало и конец диапазона не могут совпадать. Пожалуйста, введите разные числа.",
@@ -439,6 +465,9 @@ class General(commands.Cog):
             footer_text=f"Диапазон: [{start}; {end}]",
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+        # Логгируем данные для отладки и анализа
+        logger.info(
+            f'Для {interaction.user.display_name} было сгенерировано число {result} в диапазоне [{start}; {end}]')
 
 
 async def setup(bot):
