@@ -20,7 +20,11 @@ logger = logging.getLogger("slashy.general")
 
 
 class General(commands.Cog):
-    """Модуль с общими командами"""
+    """### Модуль с общими командами
+
+    - Команда :meth:`lvl` для вывода карточки с уровнем пользователя
+    - Команда :meth:`guess` для игры "Угадай число"
+    - Команда :meth:`rand` для генерации случайного числа в заданном диапазоне"""
 
     def __init__(self, bot: "Bot"):
         self.bot = bot
