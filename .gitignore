@@ -210,3 +210,6 @@ __marimo__/
 logs/
 *.log
 test.py
+rules.docx
+~$rules.docx
+~*.tmp
