@@ -63,7 +63,7 @@ class Events(commands.Cog):
         # Начисляем опыт за сообщение
         await add_xp(user_id=message.author.id, guild_id=message.guild.id, xp=10, pool=self.bot.db_pool)
 
-    def get_valid_members(self, channel: discord.VoiceChannel | discord.StageChannel) -> list[discord.Member]:
+    async def get_valid_voice_members(self, channel: discord.VoiceChannel | discord.StageChannel, filtered: bool = False):
         """### Функция для получения валидных пользователей в голосовом канале
         Валидные пользователи - все, кроме ботов
 
@@ -74,10 +74,27 @@ class Events(commands.Cog):
             list[discord.Member]: Список валидных пользователей (всех, кроме ботов)
         """
         logger.debug(
-            f'Начато выполнение get_valid_members - получение валидных пользователей (не являющихся ботами) \
+            f'Начато выполнение get_valid_voice_members - получение валидных пользователей (не являющихся ботами) \
 для голосового канала {channel.id} ({channel.name}) на сервере {channel.guild.id} ({channel.guild.name})')
         # Возвращаем список участников канала, исключая ботов
-        return [m for m in channel.members if not m.bot]
+        if not filtered:
+            return [m for m in channel.members if not m.bot]
+        # Проверяем, что пул соединений с базой данных инициализирован
+        if not self.bot.db_pool:
+            logger.warning(
+                'Пул соединений с базой данных не инициализирован. Пропуск фильтрации участников голосового канала')
+            return
+        async with self.bot.db_pool.acquire() as conn:
+            settings = await conn.fetch(
+                """
+                SELECT user_id, vc_stats_enabled
+                FROM user_settings
+                WHERE guild_id = $1
+            """,
+                channel.guild.id
+            )
+            d = {r[0]: r[1] for r in settings}
+            return [m for m in channel.members if not m.bot and d.get(m.id)]
 
     async def save_time(self, user_id: int, guild_id: int, duration: int):
         """### Функция для сохранения сессии "общения" в базе данных
@@ -199,7 +216,7 @@ class Events(commands.Cog):
 {member.id} ({member.display_name}) на сервере {member.guild.id} ({member.guild.name})')
         async with self.bot.db_pool.acquire() as conn:
             # Проверяем, что на сервере включён сбор статистики времени "общения"
-            row = await conn.execute(
+            row = await conn.fetchrow(
                 """
                 SELECT vc_stats_enabled FROM guild_settings
                 WHERE guild_id = $1
@@ -216,7 +233,8 @@ class Events(commands.Cog):
                 logger.debug(f'На сервере {member.guild.id} ({member.guild.name}) не разрешён (не указан) сбор статистики времени "общения" \
 - пропуск обработки')
                 return
-            row = await conn.execute(
+            # Проверяем пользовательские настройки по сбору статистики
+            row = await conn.fetchrow(
                 """
                 SELECT vc_stats_enabled FROM user_settings
                 WHERE guild_id = $1 AND user_id = $2
@@ -244,6 +262,8 @@ class Events(commands.Cog):
                     member.id,
                     True,
                 )
+            logger.debug(f'Разрешение на сбор статистики времени "общения" пользователя \
+{member.id} ({member.display_name}) на сервере {member.guild.id} ({member.guild.name}) есть - переходим к дальнейшей обработке')
         # Если пользователь покинул канал
         if before.channel:
             # Прекращаем сессию "общения" для пользователя
@@ -251,7 +271,9 @@ class Events(commands.Cog):
                 f'Пользователь {member.id} ({member.display_name}) покинул канал {before.channel.id}')
             await self.stop_tracking(member)
             # Получаем список оставшихся пользователей (без ботов)
-            valid_members = self.get_valid_members(before.channel)
+            valid_members = await self.get_valid_voice_members(before.channel)
+            if not valid_members:
+                return
             # Если осталось меньше 2 человек, прекращаем сессию "общения" для оставшегося пользователя
             if len(valid_members) < 2:
                 logger.debug(
@@ -262,8 +284,10 @@ class Events(commands.Cog):
         if after.channel:
             logger.debug(
                 f'Пользователь {member.id} ({member.display_name}) подключился к каналу {after.channel.id}')
-            # Получаем список пользователей в канале (без ботов)
-            valid_members = self.get_valid_members(after.channel)
+            # Получаем список пользователей в канале (без ботов), учитывая их разрешение на сбор статистики времени общения
+            valid_members = await self.get_valid_voice_members(after.channel, True)
+            if not valid_members:
+                return
             # Если в канале как минимум 2 человека, запускаем сессию "общения" для каждого
             if len(valid_members) >= 2:
                 logger.debug(
