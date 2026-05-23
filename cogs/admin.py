@@ -240,6 +240,16 @@ class SettingChoiceButton(discord.ui.Button):
     Создана для установки заранее определенного значения из списка choices"""
 
     def __init__(self, bot: 'Bot', setting: dict, choice_data: dict, category: Literal['user', 'server'], to_upd: 'ManageSettings'):
+        """
+        ### Кнопка выбора конкретного значения настройки
+        Создана для установки заранее определенного значения из списка choices
+        Args:
+            bot (:class:`Bot`): Запущенный Дискорд-бот
+            setting (dict): Настройка, значение которой изменяем. Является одной из :data:`server_settings` или :data:`user_settings`
+            choice_data (dict): Возможное значение настройки, является одним из choices в **setting**. Содержит читаемое название и само значение
+            category (Literal['user', 'server']): Категория настройки (настройка сервера или пользовательская настройка)
+            to_upd (:class:`ManageSettings`): View, который отображает значения настроек. Хранится для последующего обновления после изменения значения настройки
+        """
         super().__init__(label=choice_data['name'],
                          style=discord.ButtonStyle.secondary)
         self.bot = bot
@@ -291,13 +301,24 @@ class SettingChoiceButton(discord.ui.Button):
 
 
 class ChangeSetting(discord.ui.View):
+    """### UI-представление для изменения значения настройки
+    Содержит несколько :class:`SettingChoiceButton` для выбора значения настройки"""
 
-    def __init__(self, bot: 'Bot', setting: dict, category: Literal['user', 'server'], view: 'ManageSettings', interaction: discord.Interaction):
+    def __init__(self, bot: 'Bot', setting: dict, category: Literal['user', 'server'], to_upd: 'ManageSettings', interaction: discord.Interaction):
+        """### UI-представление для изменения значения настройки
+        Содержит несколько :class:`SettingChoiceButton` для выбора значения настройки
+        Args:
+            bot (:class:`Bot`): Запущенный Дискорд-бот
+            setting (dict): Настройка, значение которой изменяем. Является одной из :data:`server_settings` или :data:`user_settings`
+            category (Literal['user', 'server']): Категория настройки (настройка сервера или пользовательская настройка)
+            to_upd (:class:`ManageSettings`): View, который отображает значения настроек. Хранится для последующего обновления после изменения значения настройки
+            interaction (:class:`discord.Interaction`): Взаимодействие, из которого было вызвано изменение значения настройки
+        """
         super().__init__(timeout=60)
         self.bot = bot
         self.setting = setting
         self.category: Literal['user', 'server'] = category
-        self.init_view: 'ManageSettings' = view
+        self.init_view: 'ManageSettings' = to_upd
         self.initial_interaction = interaction
 
         if 'choices' in self.setting:
@@ -323,12 +344,22 @@ class ChangeSetting(discord.ui.View):
 
 
 class SelectSetting(discord.ui.Select):
+    """### Выпадающий список для выбора настройки, значение которой требуется изменить
+    Содержит настройки, отображаемые на текущей странице :class:`ManageSettings`, который содержит данный список"""
 
-    def __init__(self, bot: 'Bot', settings: list, category: Literal['user', 'server'], view: 'ManageSettings'):
+    def __init__(self, bot: 'Bot', settings: list, category: Literal['user', 'server'], to_upd: 'ManageSettings'):
+        """### Выпадающий список для выбора настройки, значение которой требуется изменить
+        Содержит настройки, отображаемые на текущей странице :class:`ManageSettings`, который содержит данный список
+        Args:
+            bot (:class:`Bot`): Запущенный Дискорд-бот
+            settings (list[dict]): Список настроек, значение которых можно изменить. Содержит настройки из :data:`server_settings` или :data:`user_settings`
+            category (Literal['user', 'server']): Категория настройки (настройка сервера или пользовательская настройка)
+            to_upd (:class:`ManageSettings`): View, который отображает значения настроек. Хранится для последующего обновления после изменения значения настройки
+        """
         self.bot = bot
         self.category: Literal['user', 'server'] = category
         self.settings = settings
-        self.init_view: 'ManageSettings' = view
+        self.init_view: 'ManageSettings' = to_upd
         options = [
             discord.SelectOption(
                 label=setting['name'], value=setting['code']) for setting in self.settings
@@ -395,8 +426,16 @@ class SelectSetting(discord.ui.Select):
 
 
 class ManageSettings(discord.ui.View):
+    """### UI-представление для изменения настроек в одной из категорий
+    Предназначено для редактирования настроек сервера :data:`server_settings` или пользовательских настроек :data:`user_settings`"""
 
     def __init__(self, bot: 'Bot', category: Literal['user', 'server']):
+        """### UI-представление для изменения настроек в одной из категорий
+        Предназначено для редактирования настроек сервера :data:`server_settings` или пользовательских настроек :data:`user_settings`
+        Args:
+            bot (:class:`Bot`): Запущенный Дискорд-бот
+            category (Literal['user', 'server']): Категория настройки (настройка сервера или пользовательская настройка)
+        """
         super().__init__()
         logger.debug('Создание интерфейса для просмотра текущих параметров')
         self.bot = bot
@@ -534,6 +573,7 @@ class ManageSettings(discord.ui.View):
 
 
 class UserSettingsButton(discord.ui.Button):
+    """### Кнопка для перехода к изменению пользовательских настроек :data:`user_settings`"""
 
     def __init__(self, bot: 'Bot'):
         super().__init__(label='Пользовательские настройки')
@@ -547,6 +587,7 @@ class UserSettingsButton(discord.ui.Button):
 
 
 class ServerSettingsButton(discord.ui.Button):
+    """### Кнопка для перехода к изменению настроек сервера :data:`server_settings`"""
 
     def __init__(self, bot: 'Bot'):
         super().__init__(label='Настройки сервера')
@@ -560,24 +601,61 @@ class ServerSettingsButton(discord.ui.Button):
 
 
 class SetupView(discord.ui.View):
-    """### UI-представление для настройки бота"""
+    """### UI-представление для изменения настроек бота
+    Позволяет пользователю перейти к изменению настроек сервера или пользовательских настроек"""
 
-    def __init__(self, bot: 'Bot', interaction: discord.Interaction):
+    def __init__(self, bot: 'Bot', interaction: discord.Interaction, allow_server_settings: bool):
+        """### UI-представление для изменения настроек бота
+        Позволяет пользователю перейти к изменению настроек сервера или пользовательских настроек"""
         super().__init__(timeout=90)
         logger.debug('Создание интерфейса для выбора категории настроек')
-        if not interaction.guild or not interaction.guild.owner or not type(interaction.user) is discord.Member:
-            return
-        logger.debug('Проверка категории "Управление сервером"')
-        if interaction.user.guild_permissions.administrator or interaction.user.id == interaction.guild.owner.id or interaction.user.guild_permissions.manage_guild:
+        self.bot = bot
+        self.initial_interaction = interaction
+
+        if allow_server_settings:
             self.add_item(ServerSettingsButton(bot))
             logger.debug(
                 'Пользователю открыт доступ к категории "Управление сервером"')
+
         self.add_item(UserSettingsButton(bot))
-        self.initial_interaction = interaction
         logger.debug('Интерфейс выбора категории настроек создан')
 
+    @classmethod
+    async def create(cls, bot: 'Bot', interaction: discord.Interaction):
+        if not interaction.guild or not interaction.guild.owner or not isinstance(interaction.user, discord.Member):
+            return cls(bot, interaction, allow_server_settings=False)
+
+        user = interaction.user
+        guild = interaction.guild
+
+        is_admin_or_manager = user.guild_permissions.administrator or user.guild_permissions.manage_guild
+        is_owner = user.id == guild.owner_id
+
+        allow_server_settings = False
+
+        if is_owner:
+            allow_server_settings = True
+        elif is_admin_or_manager:
+            only_owner_access = False
+            if bot.db_pool:
+                try:
+                    async with bot.db_pool.acquire() as con:
+                        row = await con.fetchrow(
+                            "SELECT only_owner_access FROM guild_settings WHERE guild_id = $1",
+                            guild.id
+                        )
+                        if row is not None:
+                            only_owner_access = row['only_owner_access']
+                except Exception as e:
+                    logger.error(
+                        f'Ошибка при проверке настройки only_owner_access для гильдии {guild.id}: {e}', exc_info=True)
+
+            if not only_owner_access:
+                allow_server_settings = True
+
+        return cls(bot, interaction, allow_server_settings)
+
     async def on_timeout(self):
-        # По истечении тайм-аута пробуем удалить исходное сообщение
         try:
             logger.debug(
                 'Время работы панели выбора категории настроек истекло')
@@ -593,7 +671,8 @@ class SetupView(discord.ui.View):
 class Admin(commands.Cog):
     """### Модуль с административными командами для управления/настройки бота
 
-    - Команда :meth:`manage` для управления ботом"""
+    - Команда :meth:`manage` для управления ботом
+    - Команда :meth:`setup` для изменения настроек бота"""
 
     def __init__(self, bot: 'Bot'):
         self.bot = bot
@@ -629,12 +708,15 @@ class Admin(commands.Cog):
     async def setup(self, interaction: discord.Interaction):
         logger.info(
             f'Пользователь {user_data(interaction)} вызвал настройки бота на сервере {server_data(interaction)}')
+
+        await interaction.response.defer(ephemeral=True)
+
         embed = create_embed(
-            title='Выберете нужную категорию, которую хотите настроить',
+            title='Выберите нужную категорию, которую хотите настроить',
             color=discord.Color.blue()
         )
-        view = SetupView(self.bot, interaction)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        view = await SetupView.create(self.bot, interaction)
+        await interaction.edit_original_response(embed=embed, view=view)
 
 
 async def setup(bot):
