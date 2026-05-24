@@ -1,5 +1,6 @@
 import time
 import discord
+import asyncio
 from discord.ext import commands, tasks
 import logging
 from utils import add_xp
@@ -21,6 +22,8 @@ class Events(commands.Cog):
         # Хранит данные о времени пользователей в голосовых каналах, при условии что в канале 2+ человека
         # Формат: {user_id: {"start": timestamp_начала, "guild_id": ID_сервера}}
         self.active_sessions = {}
+        # Сессии на паузе (вылетевшие): {user_id: {"start": ts, "guild_id": id, "expires_at": ts_окончания_ожидания}}
+        self.pending_sessions = {}
         # Запускаем фоновую задачу сохранения
         self.save_sessions_task.start()
 
@@ -69,32 +72,62 @@ class Events(commands.Cog):
 
         Args:
             channel (discord.VoiceChannel | discord.StageChannel): Голосовой канал, для которого нужно получить список валидных пользователей
+            filtered (bool): Если True, оставляет только пользователей с разрешенным сбором статистики
 
         Returns:
-            list[discord.Member]: Список валидных пользователей (всех, кроме ботов)
+            list[discord.Member]: Список валидных пользователей
         """
         logger.debug(
-            f'Начато выполнение get_valid_voice_members - получение валидных пользователей (не являющихся ботами) \
-для голосового канала {channel.id} ({channel.name}) на сервере {channel.guild.id} ({channel.guild.name})')
-        # Возвращаем список участников канала, исключая ботов
+            f'Начато выполнение get_valid_voice_members - получение валидных пользователей (не являющихся ботами) '
+            f'для голосового канала {channel.id} ({channel.name}) на сервере {channel.guild.id} ({channel.guild.name})')
+
         if not filtered:
             return [m for m in channel.members if not m.bot]
-        # Проверяем, что пул соединений с базой данных инициализирован
+
         if not self.bot.db_pool:
             logger.warning(
                 'Пул соединений с базой данных не инициализирован. Пропуск фильтрации участников голосового канала')
-            return
+            return []
+
         async with self.bot.db_pool.acquire() as conn:
-            settings = await conn.fetch(
-                """
-                SELECT user_id, vc_stats_enabled
-                FROM user_settings
-                WHERE guild_id = $1
-            """,
+            guild_row = await conn.fetchrow(
+                "SELECT vc_stats_enabled FROM guild_settings WHERE guild_id = $1",
                 channel.guild.id
             )
-            d = {r[0]: r[1] for r in settings}
-            return [m for m in channel.members if not m.bot and d.get(m.id)]
+            if not guild_row or guild_row['vc_stats_enabled'] is False:
+                logger.debug(
+                    f'На сервере {channel.guild.id} отключен или не настроен сбор статистики')
+                return []
+
+            settings = await conn.fetch(
+                "SELECT user_id, vc_stats_enabled FROM user_settings WHERE guild_id = $1",
+                channel.guild.id
+            )
+            user_settings_dict = {r['user_id']: r['vc_stats_enabled'] for r in settings}
+            valid_members = []
+            for m in channel.members:
+                if m.bot:
+                    continue
+                user_enabled = user_settings_dict.get(m.id, True)
+                if user_enabled is True:
+                    valid_members.append(m)
+                    if m.id not in user_settings_dict:
+                        logger.debug(
+                            f'У пользователя {m.id} не указана настройка, создаем запись со значением True')
+                        try:
+                            await conn.execute(
+                                """
+                                INSERT INTO user_settings (guild_id, user_id, vc_stats_enabled)
+                                VALUES ($1, $2, $3)
+                                ON CONFLICT (guild_id, user_id) DO NOTHING
+                                """,
+                                channel.guild.id, m.id, True
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f'Ошибка автоматического создания настройки для {m.id}: {e}')
+
+            return valid_members
 
     async def save_time(self, user_id: int, guild_id: int, duration: int):
         """### Функция для сохранения сессии "общения" в базе данных
@@ -139,178 +172,97 @@ class Events(commands.Cog):
             logger.warning(
                 f'Ошибка при сохранении данных сессии "общения" пользователя {user_id} в БД: {e}', exc_info=True)
 
-    async def stop_tracking(self, member: discord.Member):
-        """### Функция прекращения отслеживания времени "общения" пользователя
-        Сохраняет данные пользователя, когда он выходит из голосового канала и очищает данные сессии
+    async def start_tracking(self, member: discord.Member):
+        if member.id in self.active_sessions:
+            return
 
-        Args:
-            member (discord.Member): Пользователь, для которого нужно сохранить данные
-        """
+        if member.id in self.pending_sessions:
+            logger.debug(
+                f'Пользователь {member.id} ({member.display_name}) вернулся из pending_sessions. Восстанавливаем сессию.')
+            session = self.pending_sessions.pop(member.id)
+            session.pop('expires_at', None)
+            self.active_sessions[member.id] = session
+            return
+
+        self.active_sessions[member.id] = {
+            'start': time.time(),
+            'guild_id': member.guild.id
+        }
         logger.debug(
-            f'Начато выполнение stop_tracking - прекращение сессии "общения" для пользователя {member.id} ({member.display_name}) \
-на сервере {member.guild.id} ({member.guild.name})')
-        # Получаем данные о сессии и удаляем их из списка активных сессий
-        logger.debug(
-            f'Получение данных сессии "общения" для пользователя {member.id} ({member.display_name}) из списка активных сессий')
+            f'Создана новая сессия для пользователя {member.id} ({member.display_name})')
+
+    async def stop_tracking(self, member: discord.Member, grace_period: int = 180):
         session = self.active_sessions.pop(member.id, None)
         if session:
+            session['expires_at'] = time.time() + grace_period
+            self.pending_sessions[member.id] = session
             logger.debug(
-                f'Данные сессии "общения" для пользователя {member.id} ({member.display_name}) успешно получены')
-            # Получаем время "общения" пользователя, как разницу между текущим временем и временем начала сессии
-            # И сохраняем данные
-            duration = int(time.time() - session['start'])
-            await self.save_time(member.id, session['guild_id'], duration)
-        else:
-            logger.warning(
-                f'Данные сессии "общения" для пользователя {member.id} ({member.display_name}) не найдены')
-
-    async def start_tracking(self, member: discord.Member):
-        """### Функция начала отслеживания времени "общения" пользователя
-        Сохраняет время начала сессии "общения" пользователя
-        Args:
-            member (discord.Member): Пользователь, для которого нужно создать сессию "общения"
-        """
-        # Создаём сессию "общения" для пользователя, если её ещё нет
-        # Указываем текущее время и айди сервера
-        logger.debug(
-            f'Начато выполнение start_tracking - создание сессии "общения" для пользователя {member.id} ({member.display_name}) \
-на сервере {member.guild.id} ({member.guild.name})')
-        if member.id not in self.active_sessions:
-            self.active_sessions[member.id] = {
-                'start': time.time(),
-                'guild_id': member.guild.id
-            }
-            logger.debug(
-                f'Сессия "общения" для пользователя {member.id} ({member.display_name}) на сервере {member.guild.id} ({member.guild.name}) создана')
+                f'Сессия пользователя {member.id} ({member.display_name}) отправлена в pending_sessions на {grace_period} сек.')
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         """### Обработчик изменения голосового канала
-        Используется для обработки подключений и отключений пользователей к голосовым каналам
-
-        Args:
-            member (discord.Member): Пользователь, для которого изменилось состояние
-            before (discord.VoiceState): Состояние голосового канала до изменения
-            after (discord.VoiceState): Состояние голосового канала после изменения
-        """
-        logger.debug(
-            f'Обработка изменения голосового канала для пользователя {member.id} ({member.display_name}) \
-на сервере {member.guild.id} ({member.guild.name})')
-        # Пропускаем обработку для ботов
+        Используется для обработки подключений и отключений пользователей к голосовым каналам"""
         if member.bot:
-            logger.debug(
-                f'Пользователь {member.id} ({member.display_name}) является ботом - пропуск обработки')
             return
-        # Игнорируем события внутри одного канала (нас интересует только смена канала)
         if before.channel == after.channel:
-            logger.debug(
-                f'Пользователь {member.id} ({member.display_name}) не изменил канал - пропуск обработки')
             return
-        # Проверяем, что пул соединений с базой данных инициализирован
         if not self.bot.db_pool:
             logger.warning(
-                'Пул соединений с базой данных не инициализирован. Пропуск обработки подключения')
+                'Пул соединений с базой данных не инициализирован. Пропуск обработки.')
             return
-        # Проверяем, что есть разрешения на сбор статистики времени "общения"
-        logger.debug(f'Проверяем разрешения на сбор статистики времени "общения" для пользователя \
-{member.id} ({member.display_name}) на сервере {member.guild.id} ({member.guild.name})')
-        async with self.bot.db_pool.acquire() as conn:
-            # Проверяем, что на сервере включён сбор статистики времени "общения"
-            row = await conn.fetchrow(
-                """
-                SELECT vc_stats_enabled FROM guild_settings
-                WHERE guild_id = $1
-            """,
-                member.guild.id,
-            )
-            # Если на сервере запрещён сбор статистики
-            if row and row[0] is False:
-                logger.debug(f'На сервере {member.guild.id} ({member.guild.name}) запрещён сбор статистики времени "общения" \
-- пропуск обработки')
-                return
-            # Если нет разрешения на сбор статистики (не указано, можно ли её собирать)
-            if not row:
-                logger.debug(f'На сервере {member.guild.id} ({member.guild.name}) не разрешён (не указан) сбор статистики времени "общения" \
-- пропуск обработки')
-                return
-            # Проверяем пользовательские настройки по сбору статистики
-            row = await conn.fetchrow(
-                """
-                SELECT vc_stats_enabled FROM user_settings
-                WHERE guild_id = $1 AND user_id = $2
-            """,
-                member.guild.id,
-                member.id,
-            )
-            # Если пользователь запретил сбор статистики
-            if row and row[0] is False:
-                logger.debug(f'Пользователь {member.id} ({member.display_name}) запретил сбор статистики времени "общения" \
-- пропуск обработки')
-                return
-            # Если пользователь не указал настройку
-            # Устанавливаем на "Разрешено", т.к. на сервере включён сбор статистики
-            # И пользователи должны вручную устанавливать запрет
-            if not row:
-                logger.debug(f'У пользователя {member.id} ({member.guild.id}) не указан запрет на сбор статистики времени "общения" \
-а на сервере {member.guild.id} ({member.guild.name}) разрешён сбор статистики - создаём запись с настройкой, разрещающей сбор')
-                await conn.execute(
-                    """
-                    INSERT INTO user_settings (guild_id, user_id, vc_stats_enabled)
-                    VALUES ($1, $2, $3)
-                """,
-                    member.guild.id,
-                    member.id,
-                    True,
-                )
-            logger.debug(f'Разрешение на сбор статистики времени "общения" пользователя \
-{member.id} ({member.display_name}) на сервере {member.guild.id} ({member.guild.name}) есть - переходим к дальнейшей обработке')
-        # Если пользователь покинул канал
+        logger.debug(
+            f'Обработка изменения голосового канала для пользователя {member.id} ({member.display_name}) '
+            f'на сервере {member.guild.id} ({member.guild.name})')
+
         if before.channel:
-            # Прекращаем сессию "общения" для пользователя
             logger.debug(
                 f'Пользователь {member.id} ({member.display_name}) покинул канал {before.channel.id}')
-            await self.stop_tracking(member)
-            # Получаем список оставшихся пользователей (без ботов)
-            valid_members = await self.get_valid_voice_members(before.channel)
-            if not valid_members:
-                return
-            # Если осталось меньше 2 человек, прекращаем сессию "общения" для оставшегося пользователя
-            if len(valid_members) < 2:
+            if after.channel is None:
+                await self.stop_tracking(member)
+            remaining_members = await self.get_valid_voice_members(before.channel, filtered=False)
+            if len(remaining_members) < 2:
                 logger.debug(
-                    f'В канале {before.channel.id} осталось меньше 2 человек')
-                for m in valid_members:
+                    f'В канале {before.channel.id} ({before.channel.name}) осталось меньше 2 человек. Останавливаем трекинг для всех.')
+                for m in remaining_members:
                     await self.stop_tracking(m)
-        # Если пользователь подключился к каналу
+
         if after.channel:
             logger.debug(
                 f'Пользователь {member.id} ({member.display_name}) подключился к каналу {after.channel.id}')
-            # Получаем список пользователей в канале (без ботов), учитывая их разрешение на сбор статистики времени общения
-            valid_members = await self.get_valid_voice_members(after.channel, True)
-            if not valid_members:
-                return
-            # Если в канале как минимум 2 человека, запускаем сессию "общения" для каждого
-            if len(valid_members) >= 2:
+            all_channel_members = await self.get_valid_voice_members(after.channel, filtered=False)
+            if len(all_channel_members) >= 2:
                 logger.debug(
-                    f'В канале {after.channel.id} как минимум 2 человека')
-                for m in valid_members:
+                    f'В канале {after.channel.id} ({after.channel.name}) как минимум 2 человека. Запускаем трекинг для разрешенных.')
+                allowed_members = await self.get_valid_voice_members(after.channel, filtered=True)
+                for m in allowed_members:
                     await self.start_tracking(m)
+            else:
+                logger.debug(
+                    f'В канале {after.channel.id} меньше 2 человек. Никого не отслеживаем.')
 
-    @tasks.loop(minutes=30.0)
+    @tasks.loop(seconds=30.0)
     async def save_sessions_task(self):
-        """### Задача автосохранения сессий "общения"
-        Сохраняет активные сессии "общения" пользователей каждые 30 минут на случай внезапного отключения бота
-        """
-        # Получаем текущее время и сохраняем данные для всех активных сессий, обновляя время начала
-        logger.debug(
-            'Начато выполнение save_sessions_task - автосохранение активных сессий "общения"')
         now = time.time()
-        for user_id, data in list(self.active_sessions.items()):
-            duration = int(now - data['start'])
-            if duration > 0:
-                await self.save_time(user_id, data["guild_id"], duration)
-                self.active_sessions[user_id]["start"] = now
-        logger.debug(
-            'Завершено выполнение save_sessions_task - активные сессии "общения" сохранены')
+
+        for user_id, data in list(self.pending_sessions.items()):
+            if now >= data['expires_at']:
+                grace_time = int(data['expires_at'] - now)
+                duration = int(data['expires_at'] - data['start']) - grace_time
+
+                self.pending_sessions.pop(user_id, None)
+                if duration > 0:
+                    await self.save_time(user_id, data["guild_id"], duration)
+                    logger.debug(
+                        f'Льготный период истек. Сессия {user_id} окончательно сохранена в БД.')
+
+        if int(now) % 1800 < 30:
+            logger.debug('Плановое автосохранение активных сессий...')
+            for user_id, data in list(self.active_sessions.items()):
+                duration = int(now - data['start'])
+                if duration > 0:
+                    await self.save_time(user_id, data["guild_id"], duration)
+                    self.active_sessions[user_id]["start"] = now
 
     @save_sessions_task.before_loop
     async def before_save_sessions(self):

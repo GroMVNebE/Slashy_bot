@@ -41,7 +41,7 @@ class ModuleSelect(discord.ui.Select):
             discord.SelectOption(
                 label='Команды управления', description='Перезагрузить модуль с командами управления ботом (cogs/admin.py)', value='admin'),
             discord.SelectOption(
-                label='Обработка событий', description='Перезагрузить модуль, отвечающий за обработку событий (cogs/event.py)', value='event'
+                label='Обработка событий', description='Перезагрузить модуль, отвечающий за обработку событий (cogs/events.py)', value='events'
             )
         ]
         # Используем конструктор родительского класса, указывая ограничения
