@@ -1,6 +1,5 @@
 import time
 import discord
-import asyncio
 from discord.ext import commands, tasks
 import logging
 from utils import add_xp

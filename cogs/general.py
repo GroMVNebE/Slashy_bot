@@ -1,14 +1,19 @@
+import matplotlib.ticker as ticker
+import matplotlib.pyplot as plt
 import aiohttp
 import asyncpg
 import discord
 import logging
 import io
+from datetime import timedelta, date
 from PIL import Image, ImageDraw, ImageFont
 from discord import app_commands
 from discord.ext import commands
 from typing import TYPE_CHECKING
 from utils import create_embed, add_xp
 from random import randint
+import matplotlib
+matplotlib.use('Agg')
 
 # Подлючаем типизацию для класса Bot из launch.py, избегая циклического импорта
 # Нужно для правильного определения типов в IDE
@@ -17,6 +22,7 @@ if TYPE_CHECKING:
 
 # Инициализируем логгер для этого модуля
 logger = logging.getLogger('slashy.general')
+logging.getLogger('matplotlib').setLevel(logging.WARNING)
 
 
 class General(commands.Cog):
@@ -505,6 +511,252 @@ class General(commands.Cog):
         # Логгируем данные для отладки и анализа
         logger.info(
             f'Для {interaction.user.display_name} было сгенерировано число {result} в диапазоне [{start}; {end}]')
+
+    class VoiceStatsView(discord.ui.View):
+        def __init__(self, bot: "Bot", user: discord.User | discord.Member, initial_interaction: discord.Interaction):
+            super().__init__(timeout=120.0)
+            self.bot = bot
+            self.user = user
+            self.initial_interaction = initial_interaction
+            self.current_period = "week"
+            self.offset = 0
+            self.update_buttons_state()
+
+        async def on_timeout(self):
+            try:
+                logger.debug(
+                    'Время работы интерфейса просмотра статистики времени "общения" истекло')
+                await self.initial_interaction.delete_original_response()
+            except Exception as e:
+                logger.error(
+                    f'Ошибка при удалении сообщения по тайм-ауту: {e}', exc_info=True
+                )
+
+        def update_buttons_state(self):
+            self.next_period.disabled = (self.offset >= 0)
+
+            self.set_week.style = discord.ButtonStyle.primary if self.current_period == "week" else discord.ButtonStyle.secondary
+            self.set_month.style = discord.ButtonStyle.primary if self.current_period == "month" else discord.ButtonStyle.secondary
+            self.set_year.style = discord.ButtonStyle.primary if self.current_period == "year" else discord.ButtonStyle.secondary
+
+        @discord.ui.button(emoji='⬅️', style=discord.ButtonStyle.secondary, row=0)
+        async def prev_period(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.offset -= 1
+            self.update_buttons_state()
+            await self.update_stats(interaction)
+
+        @discord.ui.button(style=discord.ButtonStyle.secondary, disabled=True, row=0)
+        async def current_label(self, interaction: discord.Interaction, button: discord.ui.Button):
+            pass
+
+        @discord.ui.button(emoji='➡️', style=discord.ButtonStyle.secondary, row=0)
+        async def next_period(self, interaction: discord.Interaction, button: discord.ui.Button):
+            if self.offset < 0:
+                self.offset += 1
+                self.update_buttons_state()
+                await self.update_stats(interaction)
+
+        @discord.ui.button(label="Неделя", style=discord.ButtonStyle.primary, row=1)
+        async def set_week(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.current_period = "week"
+            self.offset = 0
+            self.update_buttons_state()
+            await self.update_stats(interaction)
+
+        @discord.ui.button(label="Месяц", style=discord.ButtonStyle.secondary, row=1)
+        async def set_month(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.current_period = "month"
+            self.offset = 0
+            self.update_buttons_state()
+            await self.update_stats(interaction)
+
+        @discord.ui.button(label="Год", style=discord.ButtonStyle.secondary, row=1)
+        async def set_year(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.current_period = "year"
+            self.offset = 0
+            self.update_buttons_state()
+            await self.update_stats(interaction)
+
+        async def get_stats_data(self):
+            if not self.bot.db_pool:
+                return [], [], "Ошибка Базы Данных"
+
+            today = date.today()
+            labels = []
+            values = []
+            range_text = ""
+
+            async with self.bot.db_pool.acquire() as conn:
+                if self.current_period == "week":
+                    start_of_week = today - \
+                        timedelta(days=today.weekday()) + \
+                        timedelta(weeks=self.offset)
+                    end_of_week = start_of_week + timedelta(days=6)
+                    range_text = f"{start_of_week.strftime('%d.%m.%Y')} — {end_of_week.strftime('%d.%m.%Y')}"
+                    self.current_label.label = range_text
+                    rows = await conn.fetch(
+                        """
+                        SELECT day, seconds FROM voice_stats
+                        WHERE user_id = $1 AND guild_id = $2 AND day BETWEEN $3 AND $4
+                        """,
+                        self.user.id, self.initial_interaction.guild_id, start_of_week, end_of_week
+                    )
+                    db_data = {r['day']: r['seconds'] for r in rows}
+
+                    days_name = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+                    for i in range(7):
+                        current_day = start_of_week + timedelta(days=i)
+                        labels.append(days_name[i])
+                        seconds = db_data.get(current_day, 0)
+                        values.append(round(seconds / 3600.0, 2))
+
+                elif self.current_period == "month":
+                    current_year = today.year
+                    current_month = today.month + self.offset
+
+                    if current_month <= 0:
+                        current_year -= 1
+                        current_month += 12
+
+                    start_of_month = date(current_year, current_month, 1)
+                    if current_month == 12:
+                        end_of_month = date(current_year, 12, 31)
+                    else:
+                        end_of_month = date(
+                            current_year, current_month + 1, 1) - timedelta(days=1)
+
+                    range_text = f"{start_of_month.strftime('%d.%m.%Y')} — {end_of_month.strftime('%d.%m.%Y')}"
+                    self.current_label.label = range_text
+                    rows = await conn.fetch(
+                        """
+                        SELECT day, seconds FROM voice_stats
+                        WHERE user_id = $1 AND guild_id = $2 AND day BETWEEN $3 AND $4
+                        """,
+                        self.user.id, self.initial_interaction.guild_id, start_of_month, end_of_month
+                    )
+                    db_data = {r['day']: r['seconds'] for r in rows}
+
+                    total_days = (end_of_month - start_of_month).days + 1
+                    for i in range(total_days):
+                        current_day = start_of_month + timedelta(days=i)
+                        if (i + 1) in (1, 5, 10, 15, 20, 25, total_days):
+                            labels.append(str(i + 1))
+                        else:
+                            labels.append("")
+                        seconds = db_data.get(current_day, 0)
+                        values.append(round(seconds / 3600.0, 2))
+
+                elif self.current_period == "year":
+                    target_year = today.year + self.offset
+                    start_of_year = date(target_year, 1, 1)
+                    end_of_year = date(target_year, 12, 31)
+
+                    range_text = f"{start_of_year.strftime('%d.%m.%Y')} — {end_of_year.strftime('%d.%m.%Y')}"
+                    self.current_label.label = range_text
+
+                    rows = await conn.fetch(
+                        """
+                        SELECT EXTRACT(MONTH FROM day) as month, SUM(seconds) as total_seconds
+                        FROM voice_stats
+                        WHERE user_id = $1 AND guild_id = $2 AND day BETWEEN $3 AND $4
+                        GROUP BY month
+                        """,
+                        self.user.id, self.initial_interaction.guild_id, start_of_year, end_of_year
+                    )
+                    db_data = {int(r['month']): r['total_seconds']
+                               for r in rows}
+
+                    months_abbrev = [
+                        "Янв", "Фев", "Мар", "Апр", "Май", "Июн",
+                        "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"
+                    ]
+                    for m in range(1, 13):
+                        labels.append(months_abbrev[m - 1])
+                        seconds = db_data.get(m, 0)
+                        values.append(round(seconds / 3600.0, 2))
+
+            return labels, values, range_text
+
+        def generate_plot(self, labels: list[str], values: list[float], title_range: str) -> io.BytesIO:
+            plt.clf()
+            logger.debug('Строим график')
+            plt.figure(figsize=(7, 4.2), facecolor='#2f3136')
+            ax = plt.axes()
+            ax.set_facecolor('#2f3136')
+
+            for spine in ax.spines.values():
+                spine.set_visible(False)
+
+            if self.current_period in ("week", "month"):
+                x_positions = range(len(values))
+
+                plt.plot(x_positions, values, color='#5865F2', linewidth=2.5,
+                         marker='o', markersize=6, markerfacecolor='#FFFFFF')
+
+                plt.fill_between(x_positions, values,
+                                 color='#5865F2', alpha=0.15)
+
+                plt.xticks(x_positions, labels, color='#B9BBBE', fontsize=10)
+
+            elif self.current_period == "year":
+                x_positions = range(len(values))
+                plt.bar(x_positions, values, color='#5865F2', width=0.55,
+                        edgecolor='#4752C4', linewidth=1, alpha=0.9, align='center')
+                plt.xticks(x_positions, labels, color='#B9BBBE', fontsize=10)
+
+            plt.yticks(color='#B9BBBE', fontsize=10)
+            ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+            ax.yaxis.grid(True, linestyle='--', alpha=0.15, color='#FFFFFF')
+            ax.xaxis.grid(False)
+
+            max_val = max(values) if values else 0
+            if max_val < 1:
+                plt.ylim(0, 1)
+            else:
+                plt.ylim(bottom=0)
+
+            plt.title(title_range, color='#FFFFFF',
+                      fontsize=12, fontweight='bold', pad=15)
+            plt.ylabel('Время общения (в часах)',
+                       color='#B9BBBE', fontsize=10, labelpad=10)
+            logger.debug('Сохраняем результат в буфер')
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=110,
+                        bbox_inches='tight', facecolor='#2f3136')
+            buf.seek(0)
+            return buf
+
+        async def update_stats(self, interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True)
+            logger.debug(
+                f'Получаем значения для текущего диапазона ({self.current_period}, {self.offset})')
+            labels, values, range_text = await self.get_stats_data()
+            logger.debug('Запускаем генерацию графика для полученных значений')
+            buf = self.generate_plot(labels, values, range_text)
+            logger.debug('Сохраняем результат в файл для отправки')
+            file = discord.File(buf, filename="stats_plot.png")
+            logger.debug('Отправляем сообщение с полученным графиком')
+            total_hours = sum(values)
+            embed = create_embed(
+                title=f"Статистика общения — {self.user.display_name}",
+                description=f"📅 **Период**: {range_text}\n🗣️ **Всего наговорено**: `{total_hours:.2f} ч.`",
+                image_url="attachment://stats_plot.png",
+                color=discord.Color.blurple()
+            )
+            await interaction.edit_original_response(embed=embed, attachments=[file], view=self)
+            buf.close()
+
+    @app_commands.command(name='voice', description='Показывает Вашу статистику времени "общения" на сервере')
+    @app_commands.guild_only()
+    @app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.guild_id, i.user.id))
+    async def voice(self, interaction: discord.Interaction):
+        """### Команда для просмотра персональной статистики общения"""
+        logger.info(
+            f'Пользователь {interaction.user.id} вызвал команду /voice')
+        logger.debug('Создаём объект класса VoiceStatsView')
+        view = self.VoiceStatsView(self.bot, interaction.user, interaction)
+        logger.debug('Запускаем отрисовку графика')
+        await view.update_stats(interaction)
 
 
 async def setup(bot):
