@@ -65,9 +65,12 @@ CREATE TABLE IF NOT EXISTS user_settings (
     guild_id BIGINT,
     user_id BIGINT,
     vc_stats_enabled BOOLEAN,
+    vc_stats_privacy BOOLEAN,
     PRIMARY KEY (guild_id, user_id)
 );
+ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS vc_stats_privacy BOOLEAN;
 """
+# ALTER TABLE добавлен для корректного обновления БД, в дальнейшем его нужно удалить
 
 
 async def setup_database(pool: asyncpg.Pool):
@@ -254,12 +257,13 @@ async def create_default_user_settings(bot: 'Bot', interaction: discord.Interact
         default = True if guild_setting else False
         await con.execute(
             """
-            INSERT INTO user_settings (guild_id, user_id, vc_stats_enabled)
-            VALUES ($1, $2, $3)
+            INSERT INTO user_settings (guild_id, user_id, vc_stats_enabled, vc_stats_privacy)
+            VALUES ($1, $2, $3, $4)
         """,
             interaction.guild_id,
             interaction.user.id,
-            default
+            default,
+            True
         )
 
 
