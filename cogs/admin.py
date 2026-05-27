@@ -428,7 +428,7 @@ class ManageSettings(discord.ui.View):
             interaction = self.last_interaction
         elif not interaction:
             return
-        if not interaction.guild:
+        if not interaction.guild or not type(interaction.user) is discord.Member:
             return
 
         logger.debug(
@@ -452,7 +452,7 @@ class ManageSettings(discord.ui.View):
                         interaction.guild_id, interaction.user.id
                     )
                     if row is None:
-                        await create_default_user_settings(self.bot, interaction)
+                        await create_default_user_settings(self.bot, interaction.user)
                         row = await con.fetchrow(
                             f"SELECT {columns_str} FROM user_settings WHERE guild_id = $1 AND user_id = $2",
                             interaction.guild_id, interaction.user.id

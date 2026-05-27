@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw, ImageFont
 from discord import app_commands
 from discord.ext import commands
 from typing import TYPE_CHECKING
-from utils import create_embed, add_xp
+from utils import *
 from random import randint
 import matplotlib
 matplotlib.use('Agg')
@@ -30,7 +30,8 @@ class General(commands.Cog):
 
     - Команда :meth:`lvl` для вывода карточки с уровнем пользователя
     - Команда :meth:`guess` для игры "Угадай число"
-    - Команда :meth:`rand` для генерации случайного числа в заданном диапазоне"""
+    - Команда :meth:`rand` для генерации случайного числа в заданном диапазоне
+    - Команда :meth:`voice` для вывода статистики времени \"общения\""""
 
     def __init__(self, bot: "Bot"):
         self.bot = bot
@@ -389,7 +390,7 @@ class General(commands.Cog):
             interaction (discord.Interaction): Объект взаимодействия, содержащий подробные данные об отправленной команде
         """
         logger.info(
-            f'Пользователь {interaction.user.id} ({interaction.user.display_name})')
+            f'Пользователь {user_data(interaction)} использовал команду /guess')
         pool = self.bot.db_pool
         if not pool:
             logger.warning(
@@ -482,7 +483,7 @@ class General(commands.Cog):
             макс (int): Конец диапазона для генерации случайного числа
         """
         logger.info(
-            f'Пользователь {interaction.user.id} ({interaction.user.display_name}) запросил генерацию случайного числа \
+            f'Пользователь {user_data(interaction)} запросил генерацию случайного числа \
 в диапазоне [{мин}; {макс}]')
         # Проверяем, если начало и конец диапазона совпадают
         if мин == макс:
@@ -608,7 +609,7 @@ class General(commands.Cog):
                         current_day = start_of_week + timedelta(days=i)
                         labels.append(days_name[i])
                         seconds = db_data.get(current_day, 0)
-                        values.append(round(seconds / 3600.0, 2))
+                        values.append(seconds)
 
                 elif self.current_period == "month":
                     current_year = today.year
@@ -644,7 +645,7 @@ class General(commands.Cog):
                         else:
                             labels.append("")
                         seconds = db_data.get(current_day, 0)
-                        values.append(round(seconds / 3600.0, 2))
+                        values.append(seconds)
 
                 elif self.current_period == "year":
                     target_year = today.year + self.offset
@@ -673,7 +674,7 @@ class General(commands.Cog):
                     for m in range(1, 13):
                         labels.append(months_abbrev[m - 1])
                         seconds = db_data.get(m, 0)
-                        values.append(round(seconds / 3600.0, 2))
+                        values.append(seconds)
 
             return labels, values, range_text
 
@@ -705,15 +706,29 @@ class General(commands.Cog):
                 plt.xticks(x_positions, labels, color='#B9BBBE', fontsize=10)
 
             plt.yticks(color='#B9BBBE', fontsize=10)
-            ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
             ax.yaxis.grid(True, linestyle='--', alpha=0.15, color='#FFFFFF')
             ax.xaxis.grid(False)
 
             max_val = max(values) if values else 0
-            if max_val < 1:
-                plt.ylim(0, 1)
+            if max_val <= 3:
+                ax.yaxis.set_major_locator(ticker.MultipleLocator(0.25))
+            elif max_val <= 6:
+                ax.yaxis.set_major_locator(ticker.MultipleLocator(0.5))
             else:
-                plt.ylim(bottom=0)
+                if max_val > 12:
+                    ax.yaxis.set_major_locator(
+                        ticker.MaxNLocator(integer=True, nbins=10))
+                else:
+                    ax.yaxis.set_major_locator(ticker.MultipleLocator(1.0))
+
+            ax.tick_params(axis='y', colors='#B9BBBE', labelsize=10)
+            ax.yaxis.grid(True, linestyle='--', alpha=0.15, color='#FFFFFF')
+            ax.xaxis.grid(False)
+
+            if max_val < 0.25:
+                ax.set_ylim(0, 0.25)
+            else:
+                ax.set_ylim(bottom=0)
 
             plt.title(title_range, color='#FFFFFF',
                       fontsize=12, fontweight='bold', pad=15)
@@ -731,16 +746,17 @@ class General(commands.Cog):
             logger.debug(
                 f'Получаем значения для текущего диапазона ({self.current_period}, {self.offset})')
             labels, values, range_text = await self.get_stats_data()
+            conv_values = [round(value / 3600, 2) for value in values]
             logger.debug('Запускаем генерацию графика для полученных значений')
-            buf = self.generate_plot(labels, values, range_text)
+            buf = self.generate_plot(labels, conv_values, range_text)
             logger.debug('Сохраняем результат в файл для отправки')
             file = discord.File(buf, filename="stats_plot.png")
             logger.debug('Отправляем сообщение с полученным графиком')
-            total_hours = sum(values)
+            total = sum(values)
             embed = create_embed(
-                title=f"Статистика общения — {self.user.display_name}",
-                description=f"📅 **Период**: {range_text}\n🗣️ **Всего наговорено**: `{total_hours:.2f} ч.`",
-                image_url="attachment://stats_plot.png",
+                title=f'Статистика общения — {self.user.display_name}',
+                description=f'📅 **Период**: {range_text}\n🎤 **Время "общения"**: `{readable_time(total)}`',
+                image_url='attachment://stats_plot.png',
                 color=discord.Color.blurple()
             )
             await interaction.edit_original_response(embed=embed, attachments=[file], view=self)
@@ -749,12 +765,85 @@ class General(commands.Cog):
     @app_commands.command(name='voice', description='Показывает Вашу статистику времени "общения" на сервере')
     @app_commands.guild_only()
     @app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.guild_id, i.user.id))
-    async def voice(self, interaction: discord.Interaction):
+    async def voice(self, interaction: discord.Interaction, member: discord.Member | None = None):
         """### Команда для просмотра персональной статистики общения"""
+        if not self.bot.db_pool or not type(interaction.user) is discord.Member:
+            return
+
         logger.info(
-            f'Пользователь {interaction.user.id} вызвал команду /voice')
+            f'Пользователь {user_data(interaction)} вызвал команду /voice')
+        target_member = member or interaction.user
+        # Проверяем условия
+        # - На сервере включен сбор статистики времени "общения"
+        # - У пользователя не запрещён сбор статистики времени "общения"
+        # - У пользователя не запрещён доступ к статистике для всех
+        try:
+            async with self.bot.db_pool.acquire() as con:
+                guild_set = await con.fetchrow(
+                    "SELECT vc_stats_enabled FROM guild_settings WHERE guild_id = $1",
+                    interaction.guild_id
+                )
+
+                if not guild_set or not guild_set['vc_stats_enabled']:
+                    embed = create_embed(
+                        title='Ошибка!',
+                        description='На данном сервере не разрешён сбор **статистики времени "общения"**',
+                        color=discord.Color.red()
+                    )
+                    await interaction.response.send_message(embed=embed, ephemeral=True)
+                    return
+
+                user_set = await con.fetchrow(
+                    """
+                    SELECT vc_stats_enabled, vc_stats_privacy 
+                    FROM user_settings 
+                    WHERE guild_id = $1 AND user_id = $2
+                    """,
+                    interaction.guild_id,
+                    target_member.id
+                )
+                if not user_set:
+                    await create_default_user_settings(self.bot, target_member)
+                    user_set = await con.fetchrow(
+                        """
+                        SELECT vc_stats_enabled, vc_stats_privacy 
+                        FROM user_settings 
+                        WHERE guild_id = $1 AND user_id = $2
+                        """,
+                        interaction.guild_id,
+                        target_member.id
+                    )
+                is_enabled = user_set['vc_stats_enabled']
+                privacy = user_set['vc_stats_privacy']
+                if is_enabled is False:
+                    embed = create_embed(
+                        title='Ошибка!',
+                        description=f'Выбранный пользователь запретил сбор **статистики времени "общения"**',
+                        color=discord.Color.red()
+                    )
+                    await interaction.response.send_message(embed=embed, ephemeral=True)
+                    return
+                if privacy is False and target_member.id != interaction.user.id:
+                    embed = create_embed(
+                        title='Ошибка!',
+                        description=f'Выбранный пользователь запретил просмотр **статистики времени "общения"**',
+                        color=discord.Color.red()
+                    )
+                    await interaction.response.send_message(embed=embed, ephemeral=True)
+                    return
+
+        except Exception as e:
+            logger.error(
+                f'Ошибка в команде /voice для пользователя {target_member.id}: {e}', exc_info=True)
+            embed = create_embed(
+                title='Произошла ошибка',
+                description='Не удалось получить статистику времени общения. Попробуйте позже',
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
         logger.debug('Создаём объект класса VoiceStatsView')
-        view = self.VoiceStatsView(self.bot, interaction.user, interaction)
+        view = self.VoiceStatsView(self.bot, target_member, interaction)
         logger.debug('Запускаем отрисовку графика')
         await view.update_stats(interaction)
 

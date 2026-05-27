@@ -242,7 +242,7 @@ def server_data(interaction: discord.Interaction):
     return f'{interaction.guild_id} ({interaction.guild.name})'
 
 
-async def create_default_user_settings(bot: 'Bot', interaction: discord.Interaction):
+async def create_default_user_settings(bot: 'Bot', member: discord.Member):
     if not bot.db_pool:
         return
     async with bot.db_pool.acquire() as con:
@@ -252,7 +252,7 @@ async def create_default_user_settings(bot: 'Bot', interaction: discord.Interact
             FROM guild_settings
             WHERE guild_id = $1
         """,
-            interaction.guild_id
+            member.guild.id
         )
         default = True if guild_setting else False
         await con.execute(
@@ -260,8 +260,8 @@ async def create_default_user_settings(bot: 'Bot', interaction: discord.Interact
             INSERT INTO user_settings (guild_id, user_id, vc_stats_enabled, vc_stats_privacy)
             VALUES ($1, $2, $3, $4)
         """,
-            interaction.guild_id,
-            interaction.user.id,
+            member.guild.id,
+            member.id,
             default,
             True
         )
@@ -280,3 +280,35 @@ async def create_default_guild_settings(bot: 'Bot', interaction: discord.Interac
             True,
             False
         )
+
+
+def get_plural(val: int, forms: tuple[str, str, str]):
+    val = abs(val) % 100
+    if 11 <= val <= 19:
+        return forms[2]
+    n = val % 10
+    if n == 1:
+        return forms[0]
+    if 2 <= n <= 4:
+        return forms[1]
+    return forms[2]
+
+
+def readable_time(seconds: int):
+    if seconds <= 0:
+        return 'Время не указано'
+
+    hours, rem = divmod(seconds, 3600)
+    minutes, seconds = divmod(rem, 60)
+
+    parts = []
+    if hours > 0:
+        parts.append(f"{hours} {get_plural(hours, ('час', 'часа', 'часов'))}")
+    if minutes > 0:
+        parts.append(
+            f"{minutes} {get_plural(minutes, ('минута', 'минуты', 'минут'))}")
+    if seconds > 0:
+        parts.append(
+            f"{seconds} {get_plural(seconds, ('секунда', 'секунды', 'секунд'))}")
+
+    return ' '.join(parts)
