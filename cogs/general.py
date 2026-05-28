@@ -389,8 +389,10 @@ class General(commands.Cog):
         Args:
             interaction (discord.Interaction): Объект взаимодействия, содержащий подробные данные об отправленной команде
         """
+        if not type(interaction.user) is discord.Member:
+            return
         logger.info(
-            f'Пользователь {user_data(interaction)} использовал команду /guess')
+            f'Пользователь {user_data(interaction.user)} использовал команду /guess')
         pool = self.bot.db_pool
         if not pool:
             logger.warning(
@@ -482,8 +484,10 @@ class General(commands.Cog):
             мин (int): Начало диапазона для генерации случайного числа
             макс (int): Конец диапазона для генерации случайного числа
         """
+        if not type(interaction.user) is discord.Member:
+            return
         logger.info(
-            f'Пользователь {user_data(interaction)} запросил генерацию случайного числа \
+            f'Пользователь {user_data(interaction.user)} запросил генерацию случайного числа \
 в диапазоне [{мин}; {макс}]')
         # Проверяем, если начало и конец диапазона совпадают
         if мин == макс:
@@ -771,7 +775,7 @@ class General(commands.Cog):
             return
 
         logger.info(
-            f'Пользователь {user_data(interaction)} вызвал команду /voice')
+            f'Пользователь {user_data(interaction.user)} вызвал команду /voice')
         target_member = member or interaction.user
         # Проверяем условия
         # - На сервере включен сбор статистики времени "общения"

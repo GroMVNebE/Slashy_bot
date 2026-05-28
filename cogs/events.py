@@ -2,7 +2,7 @@ import time
 import discord
 from discord.ext import commands, tasks
 import logging
-from utils import add_xp
+from utils import *
 from typing import TYPE_CHECKING
 
 # Подлючаем типизацию для класса Bot из launch.py, избегая циклического импорта
@@ -19,9 +19,9 @@ class Events(commands.Cog):
         self.bot = bot
         # Словарь активных сессий "общения"
         # Хранит данные о времени пользователей в голосовых каналах, при условии что в канале 2+ человека
-        # Формат: {user_id: {"start": timestamp_начала, "guild_id": ID_сервера}}
+        # Формат: {user_id: {"start": ts_начала_текущего_периода, "session_start": ts_начала_сессии, "guild_id": ID_сервера}}
         self.active_sessions = {}
-        # Сессии на паузе (вылетевшие): {user_id: {"start": ts, "guild_id": id, "expires_at": ts_окончания_ожидания}}
+        # Сессии на паузе (вылетевшие): {user_id: {"start": ts_начала_периода, "session_start": ts_начала_сессии, "guild_id": ID_сервера, "expires_at": ts_окончания_ожидания}}
         self.pending_sessions = {}
         # Запускаем фоновую задачу сохранения
         self.save_sessions_task.start()
@@ -180,15 +180,19 @@ class Events(commands.Cog):
                 f'Пользователь {member.id} ({member.display_name}) вернулся из pending_sessions. Восстанавливаем сессию.')
             session = self.pending_sessions.pop(member.id)
             session.pop('expires_at', None)
-            self.active_sessions[member.id] = session
+            self.active_sessions[member.id] = {
+                
+            }
             return
 
+        now = time.time()
         self.active_sessions[member.id] = {
-            'start': time.time(),
+            'start': now,
+            'session_start': now,
             'guild_id': member.guild.id
         }
         logger.debug(
-            f'Создана новая сессия для пользователя {member.id} ({member.display_name})')
+            f'Создана новая сессия для пользователя {user_data(member)})')
 
     async def stop_tracking(self, member: discord.Member, grace_period: int = 180):
         session = self.active_sessions.pop(member.id, None)
