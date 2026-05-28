@@ -604,7 +604,7 @@ class SetupView(discord.ui.View):
         if is_owner:
             allow_server_settings = True
         elif is_admin_or_manager:
-            only_owner_access = False
+            only_owner_access = True
             if bot.db_pool:
                 try:
                     async with bot.db_pool.acquire() as con:
