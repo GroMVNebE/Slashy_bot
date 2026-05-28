@@ -2,7 +2,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import logging
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 from utils import create_embed, get_env, user_data, server_data, create_default_user_settings, create_default_guild_settings
 
 # Подлючаем типизацию для класса Bot из launch.py, избегая циклического импорта
@@ -226,6 +226,11 @@ user_settings = [
      'choices': [{'name': 'Включен', 'value': True},
                  {'name': 'Отключен', 'value': False}]
      },
+    {'code': 'vc_stats_privacy',
+     'name': 'Доступ к статистике времени "общения"',
+     'type': 'boolean',
+     'choices': [{'name': 'Всем', 'value': True},
+                 {'name': 'Никому', 'value': False}]}
 ]
 """### Список с пользовательскими
 Содержит пользовательские настройки в виде словарей с полями:
@@ -379,50 +384,13 @@ class SelectSetting(discord.ui.Select):
             return
         view = ChangeSetting(self.bot, selected,
                              self.category, self.init_view, interaction)
-        text = ''
-        try:
-            async with self.bot.db_pool.acquire() as con:
-                if self.category == 'user':
-                    row = await con.fetchrow(
-                        f"""
-                        SELECT {selected['code']}
-                        FROM user_settings
-                        WHERE guild_id = $1 AND user_id = $2
-                    """,
-                        interaction.guild_id,
-                        interaction.user.id
-                    )
-                else:
-                    row = await con.fetchrow(
-                        f"""
-                        SELECT {selected['code']}
-                        FROM guild_settings
-                        WHERE guild_id = $1
-                    """,
-                        interaction.guild_id,
-                    )
-                    if selected['type'] == 'bool':
-                        text = f'**{selected["name"]}**: ' + \
-                            '***Включено*** :white_check_mark:' if row[0] is True else '***Отключено*** :x:'
-                if selected['type'] == 'bool':
-                    text = f'**{selected["name"]}**: ' + \
-                        '***Включено*** :white_check_mark:' if row[0] is True else '***Отключено*** :x:'
-                embed = create_embed(
-                    title=f'Изменение значения параметра {selected["name"]}',
-                    description=text,
-                    color=discord.Color.blurple(),
-                )
-                await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-        except Exception as e:
-            logger.error(
-                f'Ошибка при подготовке текста для изменения пользовательской настройки {selected["code"]} для пользователя \
-{user_data(interaction)} на сервере {server_data(interaction)}: {e}', exc_info=True)
-            embed = create_embed(
-                title='Ошибка!',
-                description='Произошла ошибка при создании встраиваемой формы с интерфейсом для изменения значения параметра',
-                color=discord.Color.red(),
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        embed = create_embed(
+            title=f'Изменение значения параметра {selected["name"]}',
+            description='Выберите новое значение параметра',
+            color=discord.Color.blurple(),
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 class ManageSettings(discord.ui.View):
@@ -460,7 +428,7 @@ class ManageSettings(discord.ui.View):
             interaction = self.last_interaction
         elif not interaction:
             return
-        if not interaction.guild:
+        if not interaction.guild or not type(interaction.user) is discord.Member:
             return
 
         logger.debug(
@@ -484,7 +452,7 @@ class ManageSettings(discord.ui.View):
                         interaction.guild_id, interaction.user.id
                     )
                     if row is None:
-                        await create_default_user_settings(self.bot, interaction)
+                        await create_default_user_settings(self.bot, interaction.user)
                         row = await con.fetchrow(
                             f"SELECT {columns_str} FROM user_settings WHERE guild_id = $1 AND user_id = $2",
                             interaction.guild_id, interaction.user.id
@@ -507,7 +475,7 @@ class ManageSettings(discord.ui.View):
                         f'Перевод значения ({value}) в удобный для чтения формат для {setting["code"]}')
 
                     if 'choices' in setting:
-                        display_name = "***Не задано***"
+                        display_name = "Не задано"
                         for choice in setting['choices']:
                             if choice['value'] == value:
                                 display_name = choice['name']
