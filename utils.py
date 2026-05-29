@@ -73,15 +73,17 @@ CREATE TABLE IF NOT EXISTS voice_max_sessions (
     user_id BIGINT,
     day DATE DEFAULT CURRENT_DATE,
     max_seconds INTEGER DEFAULT 0,
-    PRIMARY KEY (guild_id, user_id, day)
+    PRIMARY KEY (guild_id, user_id, day),
+    CONSTRAINT check_time CHECK (max_seconds >= 0)
 );
 CREATE TABLE IF NOT EXISTS voice_detailed_sessions (
     session_id SERIAL PRIMARY KEY,
     guild_id BIGINT,
     user_id BIGINT,
     start_time TIMESTAMP WITH TIME ZONE,
-    end_time TIMESTAMP WITH TIME ZONE,
-    duration_seconds INTEGER
+    end_time TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    seconds INTEGER,
+    CONSTRAINT check_timestamp CHECK (end_time > start_time)
 );
 """
 

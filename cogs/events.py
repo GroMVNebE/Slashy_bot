@@ -3,6 +3,7 @@ import discord
 from discord.ext import commands, tasks
 import logging
 from utils import *
+from datetime import datetime, timezone, timedelta
 from typing import TYPE_CHECKING
 
 # Подлючаем типизацию для класса Bot из launch.py, избегая циклического импорта
@@ -21,7 +22,7 @@ class Events(commands.Cog):
         # Хранит данные о времени пользователей в голосовых каналах, при условии что в канале 2+ человека
         # Формат: {user_id: {"start": ts_начала_текущего_периода, "session_start": ts_начала_сессии, "guild_id": ID_сервера}}
         self.active_sessions = {}
-        # Сессии на паузе (вылетевшие): {user_id: {"start": ts_начала_периода, "session_start": ts_начала_сессии, "guild_id": ID_сервера, "expires_at": ts_окончания_ожидания}}
+        # Сессии на паузе: {user_id: {"start": ts_начала_периода, "session_start": ts_начала_сессии, "guild_id": ID_сервера, "expires_at": ts_окончания_ожидания}}
         self.pending_sessions = {}
         # Запускаем фоновую задачу сохранения
         self.save_sessions_task.start()
@@ -29,12 +30,22 @@ class Events(commands.Cog):
     async def cog_unload(self):
         """### Обработчик выгрузки кога
         При перезагрузке кога останавливает задачу сохранения сессий "общения", чтобы избежать ошибок при повторном запуске кога
-        (избавиться от двух работающих задач одновременно)
+        (избавиться от двух работающих задач одновременно), а также сохраняет информацию о сессиях "общения"
         """
         # Отключаем фоновую задачу сохранения сессий
         logger.info(
-            'Начато выполнение cog_unload - производится отключение фоновой задачи сохранения сессий "общения"')
+            'Начато выполнение cog_unload - сохранение сессий "общения"')
         self.save_sessions_task.cancel()
+        try:
+            for user_id, data in list(self.active_sessions.items()):
+                self.pending_sessions.pop(user_id, None)
+                await self.save_time(user_id, data, False)
+            for user_id, data in list(self.pending_sessions.items()):
+                self.pending_sessions.pop(user_id, None)
+                await self.save_time(user_id, data, False)
+        except Exception as e:
+            logger.error(
+                f'В процессе сохранения сессий "общения" произошла ошибка: {e}', exc_info=True)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -128,7 +139,7 @@ class Events(commands.Cog):
 
             return valid_members
 
-    async def save_time(self, user_id: int, guild_id: int, duration: int):
+    async def save_time(self, user_id: int, session: dict, autosave: bool):
         """### Функция для сохранения сессии "общения" в базе данных
         Сохраняет время общения пользователя при условии, что сессия длилась хотя бы 3 секунды
 
@@ -137,13 +148,24 @@ class Events(commands.Cog):
             guild_id (int): ID сервера
             duration (int): Продолжительность сессии в секундах
         """
+        try:
+            end_time = session.get('left_at', time.time())
+            prd_duration = int(end_time - session['start'])
+            ssn_start: datetime = session['session_start']
+            ssn_end = datetime.fromtimestamp(end_time, timezone.utc)
+            ssn_duration = int((ssn_end - ssn_start).total_seconds())
+            guild_id: int = session['guild_id']
+        except Exception as e:
+            logger.error(
+                f'Ошибка при получении данных сессии "общения" пользователя {user_id}: {e}', exc_info=True)
+            return
         logger.debug(
-            f'Начато выполнение save_time - сохранение сессии "общения" для пользователя {user_id} \
-на сервере {guild_id} с продолжительностью {duration} сек.')
-        # Проверяем, что сессия длилась хотя бы 3 секунды
-        if duration < 3:
+            f'Начато выполнение save_time - сохранение {"периода" if autosave else "сессии"} "общения" для пользователя {user_id} \
+на сервере {guild_id} с продолжительностью {prd_duration} ({ssn_duration}) сек.')
+        # Проверяем, что сессия длилась хотя бы 15 секунд
+        if ssn_duration < 15:
             logger.warning(
-                f'Сессия пользователя {user_id} меньше 3 секунд, пропуск сохранения')
+                f'Сессия пользователя {user_id} меньше 15 секунд, пропуск сохранения')
             return
         # Сохраняем время в базе данных, используя UPSERT для обновления существующей записи или создания новой
         try:
@@ -156,17 +178,56 @@ class Events(commands.Cog):
             logger.debug(
                 f'Сохранение данных сессии "общения" пользователя {user_id} в БД')
             async with self.bot.db_pool.acquire() as conn:
-                await conn.execute(
-                    """
+                if autosave:
+                    await conn.execute(
+                        """
+                        INSERT INTO voice_stats (user_id, guild_id, day, seconds)
+                        VALUES ($1, $2, CURRENT_DATE, $3)
+                        ON CONFLICT (user_id, guild_id, day)
+                        DO UPDATE SET seconds = voice_stats.seconds + EXCLUDED.seconds;
+                        """,
+                        user_id, guild_id, prd_duration
+                    )
+                else:
+                    stats_query = """
                     INSERT INTO voice_stats (user_id, guild_id, day, seconds)
                     VALUES ($1, $2, CURRENT_DATE, $3)
                     ON CONFLICT (user_id, guild_id, day)
                     DO UPDATE SET seconds = voice_stats.seconds + EXCLUDED.seconds;
-                    """,
-                    user_id, guild_id, duration
-                )
+                    """
+                    max_sessions_query = """
+                    INSERT INTO voice_max_sessions (user_id, guild_id, day, max_seconds)
+                    VALUES ($1, $2, CURRENT_DATE, $3)
+                    ON CONFLICT (guild_id, user_id, day)
+                    DO UPDATE SET max_seconds = GREATEST(voice_max_sessions.max_seconds, EXCLUDED.max_seconds);
+                    """
+                    if ssn_duration < 60*5:
+                        await conn.execute(
+                            f'{stats_query}',
+                            user_id, guild_id, prd_duration
+                        )
+                        await conn.execute(
+                            f'{max_sessions_query}',
+                            user_id, guild_id, ssn_duration
+                        )
+                    else:
+                        await conn.execute(
+                            f'{stats_query}',
+                            user_id, guild_id, prd_duration
+                        )
+                        await conn.execute(
+                            f'{max_sessions_query}',
+                            user_id, guild_id, ssn_duration
+                        )
+                        await conn.execute(
+                            """
+                            INSERT INTO voice_detailed_sessions(user_id, guild_id, start_time, end_time, seconds)
+                            VALUES ($1, $2, $3, $4, $5);
+                        """,
+                            user_id, guild_id, ssn_start, ssn_end, ssn_duration
+                        )
                 logger.debug(
-                    f'Сохранение данных сессии "общения" пользователя {user_id} в БД: Успешно')
+                    f'Сохранение данных {"периода" if autosave else "сессии"} "общения" пользователя {user_id} в БД: Успешно')
         except Exception as e:
             logger.warning(
                 f'Ошибка при сохранении данных сессии "общения" пользователя {user_id} в БД: {e}', exc_info=True)
@@ -180,15 +241,12 @@ class Events(commands.Cog):
                 f'Пользователь {member.id} ({member.display_name}) вернулся из pending_sessions. Восстанавливаем сессию.')
             session = self.pending_sessions.pop(member.id)
             session.pop('expires_at', None)
-            self.active_sessions[member.id] = {
-                
-            }
+            self.active_sessions[member.id] = session
             return
 
-        now = time.time()
         self.active_sessions[member.id] = {
-            'start': now,
-            'session_start': now,
+            'start': time.time(),
+            'session_start': datetime.now(timezone.utc),
             'guild_id': member.guild.id
         }
         logger.debug(
@@ -198,9 +256,10 @@ class Events(commands.Cog):
         session = self.active_sessions.pop(member.id, None)
         if session:
             session['expires_at'] = time.time() + grace_period
+            session['left_at'] = time.time()
             self.pending_sessions[member.id] = session
             logger.debug(
-                f'Сессия пользователя {member.id} ({member.display_name}) отправлена в pending_sessions на {grace_period} сек.')
+                f'Сессия пользователя {user_data(member)} отправлена в pending_sessions на {grace_period} сек.')
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
@@ -250,22 +309,16 @@ class Events(commands.Cog):
 
         for user_id, data in list(self.pending_sessions.items()):
             if now >= data['expires_at']:
-                grace_time = int(data['expires_at'] - now)
-                duration = int(data['expires_at'] - data['start']) - grace_time
-
                 self.pending_sessions.pop(user_id, None)
-                if duration > 0:
-                    await self.save_time(user_id, data["guild_id"], duration)
-                    logger.debug(
-                        f'Льготный период истек. Сессия {user_id} окончательно сохранена в БД.')
+                await self.save_time(user_id, data, False)
+                logger.debug(
+                    f'Льготный период истек. Сессия {user_id} окончательно сохранена в БД')
 
         if int(now) % 1800 < 30:
             logger.debug('Плановое автосохранение активных сессий...')
             for user_id, data in list(self.active_sessions.items()):
-                duration = int(now - data['start'])
-                if duration > 0:
-                    await self.save_time(user_id, data["guild_id"], duration)
-                    self.active_sessions[user_id]["start"] = now
+                await self.save_time(user_id, data, True)
+                self.active_sessions[user_id]["start"] = now
 
     @save_sessions_task.before_loop
     async def before_save_sessions(self):
