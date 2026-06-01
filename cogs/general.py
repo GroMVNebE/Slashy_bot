@@ -523,7 +523,8 @@ class General(commands.Cog):
             self.bot = bot
             self.user = user
             self.initial_interaction = initial_interaction
-            self.current_period = "week"
+            self.current_period = 'week'
+            self.mode = 'total'
             self.offset = 0
             self.update_buttons_state()
 
@@ -540,9 +541,12 @@ class General(commands.Cog):
         def update_buttons_state(self):
             self.next_period.disabled = (self.offset >= 0)
 
-            self.set_week.style = discord.ButtonStyle.primary if self.current_period == "week" else discord.ButtonStyle.secondary
-            self.set_month.style = discord.ButtonStyle.primary if self.current_period == "month" else discord.ButtonStyle.secondary
-            self.set_year.style = discord.ButtonStyle.primary if self.current_period == "year" else discord.ButtonStyle.secondary
+            self.set_week.style = discord.ButtonStyle.primary if self.current_period == 'week' else discord.ButtonStyle.secondary
+            self.set_month.style = discord.ButtonStyle.primary if self.current_period == 'month' else discord.ButtonStyle.secondary
+            self.set_year.style = discord.ButtonStyle.primary if self.current_period == 'year' else discord.ButtonStyle.secondary
+
+            self.set_total.style = discord.ButtonStyle.primary if self.mode == 'total' else discord.ButtonStyle.secondary
+            self.set_max_ssn.style = discord.ButtonStyle.primary if self.mode == 'max_ssn' else discord.ButtonStyle.secondary
 
         @discord.ui.button(emoji='⬅️', style=discord.ButtonStyle.secondary, row=0)
         async def prev_period(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -550,8 +554,8 @@ class General(commands.Cog):
             self.update_buttons_state()
             await self.update_stats(interaction)
 
-        @discord.ui.button(style=discord.ButtonStyle.secondary, disabled=True, row=0)
-        async def current_label(self, interaction: discord.Interaction, button: discord.ui.Button):
+        @discord.ui.button(label='-', style=discord.ButtonStyle.secondary, disabled=True, row=0)
+        async def period_fill(self, interaction: discord.Interaction, button: discord.ui.Button):
             pass
 
         @discord.ui.button(emoji='➡️', style=discord.ButtonStyle.secondary, row=0)
@@ -561,24 +565,40 @@ class General(commands.Cog):
                 self.update_buttons_state()
                 await self.update_stats(interaction)
 
-        @discord.ui.button(label="Неделя", style=discord.ButtonStyle.primary, row=1)
+        @discord.ui.button(label='Неделя', style=discord.ButtonStyle.primary, row=1)
         async def set_week(self, interaction: discord.Interaction, button: discord.ui.Button):
-            self.current_period = "week"
+            self.current_period = 'week'
             self.offset = 0
             self.update_buttons_state()
             await self.update_stats(interaction)
 
-        @discord.ui.button(label="Месяц", style=discord.ButtonStyle.secondary, row=1)
+        @discord.ui.button(label='Месяц', style=discord.ButtonStyle.secondary, row=1)
         async def set_month(self, interaction: discord.Interaction, button: discord.ui.Button):
-            self.current_period = "month"
+            self.current_period = 'month'
             self.offset = 0
             self.update_buttons_state()
             await self.update_stats(interaction)
 
-        @discord.ui.button(label="Год", style=discord.ButtonStyle.secondary, row=1)
+        @discord.ui.button(label='Год', style=discord.ButtonStyle.secondary, row=1)
         async def set_year(self, interaction: discord.Interaction, button: discord.ui.Button):
-            self.current_period = "year"
+            self.current_period = 'year'
             self.offset = 0
+            self.update_buttons_state()
+            await self.update_stats(interaction)
+
+        @discord.ui.button(label='Общее', style=discord.ButtonStyle.primary, row=2)
+        async def set_total(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.mode = 'total'
+            self.update_buttons_state()
+            await self.update_stats(interaction)
+
+        @discord.ui.button(label='-', style=discord.ButtonStyle.secondary, disabled=True, row=2)
+        async def mode_fill(self, interaction: discord.Interaction, button: discord.ui.Button):
+            pass
+
+        @discord.ui.button(label='Сессии', style=discord.ButtonStyle.secondary, row=2)
+        async def set_max_ssn(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.mode = 'max_ssn'
             self.update_buttons_state()
             await self.update_stats(interaction)
 
@@ -592,21 +612,22 @@ class General(commands.Cog):
             range_text = ""
 
             async with self.bot.db_pool.acquire() as conn:
+                tbl_name = 'voice_stats' if self.mode == 'total' else 'voice_max_sessions'
+                val_name = 'seconds' if self.mode == 'total' else 'max_seconds'
                 if self.current_period == "week":
                     start_of_week = today - \
                         timedelta(days=today.weekday()) + \
                         timedelta(weeks=self.offset)
                     end_of_week = start_of_week + timedelta(days=6)
                     range_text = f"{start_of_week.strftime('%d.%m.%Y')} — {end_of_week.strftime('%d.%m.%Y')}"
-                    self.current_label.label = range_text
                     rows = await conn.fetch(
-                        """
-                        SELECT day, seconds FROM voice_stats
+                        f"""
+                        SELECT day, {val_name} FROM {tbl_name}
                         WHERE user_id = $1 AND guild_id = $2 AND day BETWEEN $3 AND $4
                         """,
                         self.user.id, self.initial_interaction.guild_id, start_of_week, end_of_week
                     )
-                    db_data = {r['day']: r['seconds'] for r in rows}
+                    db_data = {r['day']: r[val_name] for r in rows}
 
                     days_name = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
                     for i in range(7):
@@ -631,15 +652,14 @@ class General(commands.Cog):
                             current_year, current_month + 1, 1) - timedelta(days=1)
 
                     range_text = f"{start_of_month.strftime('%d.%m.%Y')} — {end_of_month.strftime('%d.%m.%Y')}"
-                    self.current_label.label = range_text
                     rows = await conn.fetch(
-                        """
-                        SELECT day, seconds FROM voice_stats
+                        f"""
+                        SELECT day, {val_name} FROM {tbl_name}
                         WHERE user_id = $1 AND guild_id = $2 AND day BETWEEN $3 AND $4
                         """,
                         self.user.id, self.initial_interaction.guild_id, start_of_month, end_of_month
                     )
-                    db_data = {r['day']: r['seconds'] for r in rows}
+                    db_data = {r['day']: r[val_name] for r in rows}
 
                     total_days = (end_of_month - start_of_month).days + 1
                     for i in range(total_days):
@@ -657,12 +677,12 @@ class General(commands.Cog):
                     end_of_year = date(target_year, 12, 31)
 
                     range_text = f"{start_of_year.strftime('%d.%m.%Y')} — {end_of_year.strftime('%d.%m.%Y')}"
-                    self.current_label.label = range_text
 
+                    fnc_name = 'SUM' if self.mode == 'total' else 'MAX'
                     rows = await conn.fetch(
-                        """
-                        SELECT EXTRACT(MONTH FROM day) as month, SUM(seconds) as total_seconds
-                        FROM voice_stats
+                        f"""
+                        SELECT EXTRACT(MONTH FROM day) as month, {fnc_name}({val_name}) as total_seconds
+                        FROM {tbl_name}
                         WHERE user_id = $1 AND guild_id = $2 AND day BETWEEN $3 AND $4
                         GROUP BY month
                         """,
@@ -683,37 +703,75 @@ class General(commands.Cog):
             return labels, values, range_text
 
         def generate_plot(self, labels: list[str], values: list[float], title_range: str) -> io.BytesIO:
-            plt.clf()
-            logger.debug('Строим график')
-            plt.figure(figsize=(7, 4.2), facecolor='#2f3136')
-            ax = plt.axes()
-            ax.set_facecolor('#2f3136')
+            logger.debug(
+                f'Запущено построение графика {"времени общения" if self.mode == "total" else "максимальных сессий общения"}')
+            fig, ax = plt.subplots(figsize=(7, 4.2), dpi=120)
 
+            fig.patch.set_facecolor('#2f3136')
+
+            ax.set_facecolor('#1e1f22')
+            ax.grid(axis='y', linestyle='--', alpha=0.25, color='#ffffff')
+            ax.tick_params(colors='#B9BBBE', labelsize=10)
+            ax.set_ylabel('Время (в часах)', color='#DBDEE1',
+                          fontsize=10, fontweight='bold')
             for spine in ax.spines.values():
                 spine.set_visible(False)
 
-            if self.current_period in ("week", "month"):
-                x_positions = range(len(values))
-
-                plt.plot(x_positions, values, color='#5865F2', linewidth=2.5,
-                         marker='o', markersize=6, markerfacecolor='#FFFFFF')
-
-                plt.fill_between(x_positions, values,
-                                 color='#5865F2', alpha=0.15)
-
-                plt.xticks(x_positions, labels, color='#B9BBBE', fontsize=10)
-
-            elif self.current_period == "year":
-                x_positions = range(len(values))
-                plt.bar(x_positions, values, color='#5865F2', width=0.55,
-                        edgecolor='#4752C4', linewidth=1, alpha=0.9, align='center')
-                plt.xticks(x_positions, labels, color='#B9BBBE', fontsize=10)
-
-            plt.yticks(color='#B9BBBE', fontsize=10)
-            ax.yaxis.grid(True, linestyle='--', alpha=0.15, color='#FFFFFF')
-            ax.xaxis.grid(False)
+            plt.title(title_range, color='#FFFFFF',
+                      fontsize=12, fontweight='bold', pad=15)
 
             max_val = max(values) if values else 0
+
+            if self.mode == 'total':
+                if self.current_period in ("week", "month"):
+                    x_positions = range(len(values))
+
+                    plt.plot(x_positions, values, color='#5865F2', linewidth=2.5,
+                             marker='o', markersize=6, markerfacecolor='#FFFFFF')
+
+                    plt.fill_between(x_positions, values,
+                                     color='#5865F2', alpha=0.15)
+
+                    plt.xticks(x_positions, labels,
+                               color='#B9BBBE', fontsize=10)
+
+                elif self.current_period == "year":
+                    x_positions = range(len(values))
+                    plt.bar(x_positions, values, color='#5865F2', width=0.55,
+                            edgecolor='#4752C4', linewidth=1, alpha=0.9, align='center')
+                    plt.xticks(x_positions, labels,
+                               color='#B9BBBE', fontsize=10)
+            else:
+                flt_values = []
+                bar_colors = []
+
+                for val in values:
+                    flt_values.append(min(24, val))
+
+                    if val == max_val and max_val > 0:
+                        bar_colors.append('#FAA61A')
+                    else:
+                        bar_colors.append('#5865F2')
+
+                x_positions = range(len(values))
+
+                bars = plt.bar(x_positions, flt_values, color=bar_colors,
+                               width=0.55, linewidth=1, alpha=0.9, align='center')
+
+                plt.xticks(x_positions, labels, color='#B9BBBE', fontsize=10)
+                for i, val in enumerate(values):
+                    if val > 24:
+                        plt.text(
+                            x=x_positions[i],
+                            y=24.5,
+                            s=f"{val:.2f}ч",
+                            ha='center',
+                            va='bottom',
+                            color='#FEE75C',
+                            fontweight='bold',
+                            fontsize=9
+                        )
+
             if max_val <= 3:
                 ax.yaxis.set_major_locator(ticker.MultipleLocator(0.25))
             elif max_val <= 6:
@@ -724,24 +782,17 @@ class General(commands.Cog):
                         ticker.MaxNLocator(integer=True, nbins=10))
                 else:
                     ax.yaxis.set_major_locator(ticker.MultipleLocator(1.0))
-
-            ax.tick_params(axis='y', colors='#B9BBBE', labelsize=10)
-            ax.yaxis.grid(True, linestyle='--', alpha=0.15, color='#FFFFFF')
-            ax.xaxis.grid(False)
-
             if max_val < 0.25:
                 ax.set_ylim(0, 0.25)
             else:
                 ax.set_ylim(bottom=0)
 
-            plt.title(title_range, color='#FFFFFF',
-                      fontsize=12, fontweight='bold', pad=15)
-            plt.ylabel('Время общения (в часах)',
-                       color='#B9BBBE', fontsize=10, labelpad=10)
-            logger.debug('Сохраняем результат в буфер')
+            logger.debug(
+                'Построение графика завершено. Сохранение результата в буфер')
             buf = io.BytesIO()
-            plt.savefig(buf, format='png', dpi=110,
-                        bbox_inches='tight', facecolor='#2f3136')
+            plt.savefig(buf, format='png', dpi=120,
+                        bbox_inches='tight', facecolor=fig.get_facecolor())
+            plt.close(fig)
             buf.seek(0)
             return buf
 
@@ -756,10 +807,18 @@ class General(commands.Cog):
             logger.debug('Сохраняем результат в файл для отправки')
             file = discord.File(buf, filename="stats_plot.png")
             logger.debug('Отправляем сообщение с полученным графиком')
-            total = sum(values)
+            descr = None
+            if self.mode == 'total':
+                total = sum(values)
+                descr = f'📅 **Период**: {range_text}\n🎤 **Время "общения"**: `{readable_time(total)}`'
+            elif self.mode == 'max_ssn':
+                total = max(values)
+                descr = f'📅 **Период**: {range_text}\n🎤 **Максимальная сессия "общения"**: `{readable_time(total)}`'
+            if descr is None:
+                return
             embed = create_embed(
                 title=f'Статистика общения — {self.user.display_name}',
-                description=f'📅 **Период**: {range_text}\n🎤 **Время "общения"**: `{readable_time(total)}`',
+                description=descr,
                 image_url='attachment://stats_plot.png',
                 color=discord.Color.blurple()
             )

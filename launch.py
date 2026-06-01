@@ -103,10 +103,12 @@ class Bot(commands.Bot):
         await super().close()
 
     async def on_tree_error(self, interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
+        if not type(interaction.user) is discord.Member:
+            return
         # Если ошибка - ограничение по частоте использования команды
         if isinstance(error, discord.app_commands.CommandOnCooldown):
             logger.debug(
-                f'Пользователь {user_data(interaction)} попытался использовать команду {interaction.command} \
+                f'Пользователь {user_data(interaction.user)} попытался использовать команду {interaction.command} \
 до истечения времени ожидания ({error.retry_after:.1f} сек.) на сервере {server_data(interaction)}')
             # Отправляем пользователю сообщение с информацией о том,
             # Сколько времени осталось до возможности повторного использования команды

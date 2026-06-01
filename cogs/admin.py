@@ -155,10 +155,10 @@ class ActionSelect(discord.ui.Select):
             # Логгируем выключение бота
             logger.info(
                 f'Пользователь {user_data(interaction.user)} выключил бота')
+            await self.bot.close()
             # Закрываем соединения с БД и соединение клиента с Discord
             if self.bot.db_pool:
                 await self.bot.db_pool.close()
-            await self.bot.close()
         # Если нужно перезагрузить модуль
         elif action == 'reload':
             # Отправляем сообщение с формой выбора модуля для перезагрузки
