@@ -68,9 +68,24 @@ CREATE TABLE IF NOT EXISTS user_settings (
     vc_stats_privacy BOOLEAN,
     PRIMARY KEY (guild_id, user_id)
 );
-ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS vc_stats_privacy BOOLEAN;
+CREATE TABLE IF NOT EXISTS voice_max_sessions (
+    guild_id BIGINT,
+    user_id BIGINT,
+    day DATE DEFAULT CURRENT_DATE,
+    max_seconds INTEGER DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id, day),
+    CONSTRAINT check_time CHECK (max_seconds >= 0)
+);
+CREATE TABLE IF NOT EXISTS voice_detailed_sessions (
+    session_id SERIAL PRIMARY KEY,
+    guild_id BIGINT,
+    user_id BIGINT,
+    start_time TIMESTAMP WITH TIME ZONE,
+    end_time TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    seconds INTEGER,
+    CONSTRAINT check_timestamp CHECK (end_time > start_time)
+);
 """
-# ALTER TABLE добавлен для корректного обновления БД, в дальнейшем его нужно удалить
 
 
 async def setup_database(pool: asyncpg.Pool):
@@ -214,17 +229,17 @@ def create_embed(
     return embed
 
 
-def user_data(interaction: discord.Interaction):
+def user_data(member: discord.Member):
     """### Функция для получения данных о пользователе, вызвавшем взаимодействие
     Возвращает строку с id пользователя и его отображаемым именем
 
     Args:
-        interaction (discord.Interaction): Объект взаимодействия, содержащий подробные данные об отправленной команде
+        member (:class:`discord.Member`): Участник сервера
 
     Returns:
         str: Строка с id пользователя и отображаемым именем
     """
-    return f'{interaction.user.id} ({interaction.user.display_name})'
+    return f'{member.id} ({member.display_name})'
 
 
 def server_data(interaction: discord.Interaction):

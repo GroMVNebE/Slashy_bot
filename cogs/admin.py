@@ -51,8 +51,10 @@ class ModuleSelect(discord.ui.Select):
             'Завершена инициализация меню выбора класса ModuleSelect')
 
     async def callback(self, interaction: discord.Interaction):
+        if not type(interaction.user) is discord.Member:
+            return
         logger.debug(
-            f'Пользователь {user_data(interaction)} выбрал {self.values[0]} в ModuleSelect')
+            f'Пользователь {user_data(interaction.user)} выбрал {self.values[0]} в ModuleSelect')
         # Получаем имя выбранного модуля и формируем путь к нему
         module_name = self.values[0]
         cog_path = f'cogs.{module_name}'
@@ -135,8 +137,10 @@ class ActionSelect(discord.ui.Select):
             'Завершена инициализация меню выбора класса ActionSelect')
 
     async def callback(self, interaction: discord.Interaction):
+        if not type(interaction.user) is discord.Member:
+            return
         logger.debug(
-            f'Пользователь {user_data(interaction)} выбрал {self.values[0]} в ActionSelect')
+            f'Пользователь {user_data(interaction.user)} выбрал {self.values[0]} в ActionSelect')
         # Получаем выбранное действие
         action = self.values[0]
         # Если нужно выключить бота
@@ -150,11 +154,11 @@ class ActionSelect(discord.ui.Select):
             await interaction.response.edit_message(embed=embed, view=None)
             # Логгируем выключение бота
             logger.info(
-                f'Пользователь {user_data(interaction)} выключил бота')
+                f'Пользователь {user_data(interaction.user)} выключил бота')
+            await self.bot.close()
             # Закрываем соединения с БД и соединение клиента с Discord
             if self.bot.db_pool:
                 await self.bot.db_pool.close()
-            await self.bot.close()
         # Если нужно перезагрузить модуль
         elif action == 'reload':
             # Отправляем сообщение с формой выбора модуля для перезагрузки
@@ -265,8 +269,10 @@ class SettingChoiceButton(discord.ui.Button):
         self.to_upd = to_upd
 
     async def callback(self, interaction: discord.Interaction):
+        if not type(interaction.user) is discord.Member:
+            return
         logger.debug(
-            f'Пользователь {user_data(interaction)} выбрал опцию {self.choice_name} для {self.setting["code"]}')
+            f'Пользователь {user_data(interaction.user)} выбрал опцию {self.choice_name} для {self.setting["code"]}')
 
         if not self.bot.db_pool:
             return
@@ -508,7 +514,7 @@ class ManageSettings(discord.ui.View):
         except Exception as e:
             logger.error(
                 f'Ошибка при отрисовке страницы с настройками категории {self.category} для пользователя '
-                f'{user_data(interaction)} на сервере {server_data(interaction)}: {e}', exc_info=True)
+                f'{user_data(interaction.user)} на сервере {server_data(interaction)}: {e}', exc_info=True)
             embed = create_embed(
                 title='Ошибка!',
                 description='Произошла ошибка при отрисовке страницы с настройками',
@@ -548,8 +554,10 @@ class UserSettingsButton(discord.ui.Button):
         self.bot = bot
 
     async def callback(self, interaction: discord.Interaction):
+        if not type(interaction.user) is discord.Member:
+            return
         logger.debug(
-            f'Пользователь {user_data(interaction)} выбрал категорию "Пользовательские настройки"')
+            f'Пользователь {user_data(interaction.user)} выбрал категорию "Пользовательские настройки"')
         view = ManageSettings(self.bot, 'user')
         await view.draw_page(interaction)
 
@@ -562,8 +570,10 @@ class ServerSettingsButton(discord.ui.Button):
         self.bot = bot
 
     async def callback(self, interaction: discord.Interaction):
+        if not type(interaction.user) is discord.Member:
+            return
         logger.debug(
-            f'Пользователь {user_data(interaction)} выбрал категорию "Настройки сервера"')
+            f'Пользователь {user_data(interaction.user)} выбрал категорию "Настройки сервера"')
         view = ManageSettings(self.bot, 'server')
         await view.draw_page(interaction)
 
@@ -674,8 +684,10 @@ class Admin(commands.Cog):
     @app_commands.command(name="setup", description="Настройки бота")
     @app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.guild_id, i.user.id))
     async def setup(self, interaction: discord.Interaction):
+        if not type(interaction.user) is discord.Member:
+            return
         logger.info(
-            f'Пользователь {user_data(interaction)} вызвал настройки бота на сервере {server_data(interaction)}')
+            f'Пользователь {user_data(interaction.user)} вызвал настройки бота на сервере {server_data(interaction)}')
 
         await interaction.response.defer(ephemeral=True)
 
