@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import List, Any, Dict, TYPE_CHECKING
+from typing import List, Any, Dict, TYPE_CHECKING, Literal
 import asyncpg
 import discord
 from dotenv import load_dotenv
@@ -14,45 +14,48 @@ logger = logging.getLogger('slashy.utils')
 load_dotenv()
 
 
-def get_env(key: str) -> str:
-    """Получает значение переменной окружения из .env файла. Если переменная не найдена, выбрасывает исключение
+def get_env(key: str, default: str | None = None) -> str:
+    """### Функция для получения значения переменной из .env файла
+    Получает значение переменной из .env файла встроенным методом
 
     Args:
         key (str): Название переменной окружения (например, 'DISCORD_TOKEN')
+        default (str | None, optional): Значение по умолчанию, которое будет присвоено, если в .env не найдено значение переменной
 
     Raises:
-        ValueError: Если переменная не найдена в .env файле, выбрасывает исключение с сообщением об ошибке
+        ValueError: Если переменная не найдена в .env файле и не задано значение по умолчанию, выбрасывает исключение с сообщением об ошибке
 
     Returns:
         str: Значение переменной окружения
     """
-    value = os.getenv(key)
-    if not value:
-        logger.error(f'Переменная {key} не задана в .env')
+    val = os.getenv(key)
+    if not val:
+        val = default
+    if not val:
         raise ValueError(f'Переменная {key} не задана в .env')
-    return value
+    return val
 
 
 DATABASE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS user_levels (
     guild_id BIGINT,
     user_id BIGINT,
-    xp BIGINT DEFAULT 0,
-    level INTEGER DEFAULT 1,
+    xp BIGINT DEFAULT 0 CHECK (xp >= 0),
+    level INTEGER DEFAULT 1 CHECK (level >= 1),
     PRIMARY KEY (guild_id, user_id)
 );
 CREATE TABLE IF NOT EXISTS guess_number (
     guild_id BIGINT,
     user_id BIGINT,
-    number INTEGER,
-    tries INTEGER DEFAULT 0,
+    number INTEGER CHECK (number BETWEEN 0 AND 1000),
+    tries INTEGER DEFAULT 0 CHECK (tries >= 0),
     PRIMARY KEY (guild_id, user_id)
 );
 CREATE TABLE IF NOT EXISTS voice_stats (
     guild_id BIGINT,
     user_id BIGINT,
     day DATE DEFAULT CURRENT_DATE,
-    seconds INTEGER DEFAULT 0,
+    seconds INTEGER DEFAULT 0 CHECK (seconds >= 0),
     PRIMARY KEY (guild_id, user_id, day)
 );
 CREATE TABLE IF NOT EXISTS guild_settings (
@@ -72,9 +75,8 @@ CREATE TABLE IF NOT EXISTS voice_max_sessions (
     guild_id BIGINT,
     user_id BIGINT,
     day DATE DEFAULT CURRENT_DATE,
-    max_seconds INTEGER DEFAULT 0,
-    PRIMARY KEY (guild_id, user_id, day),
-    CONSTRAINT check_time CHECK (max_seconds >= 0)
+    max_seconds INTEGER DEFAULT 0 CHECK (max_seconds >= 0),
+    PRIMARY KEY (guild_id, user_id, day)
 );
 CREATE TABLE IF NOT EXISTS voice_detailed_sessions (
     session_id SERIAL PRIMARY KEY,
@@ -82,44 +84,76 @@ CREATE TABLE IF NOT EXISTS voice_detailed_sessions (
     user_id BIGINT,
     start_time TIMESTAMP WITH TIME ZONE,
     end_time TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    seconds INTEGER,
+    seconds INTEGER CHECK (seconds >= 0),
     CONSTRAINT check_timestamp CHECK (end_time > start_time)
 );
 """
 
+UPDATES = """
+ALTER TABLE user_levels
+ADD CHECK (xp >= 0)
+ADD CHECK (level >= 1);
+ALTER TABLE guess_number
+ADD CHECK (number BETWEEN 0 AND 1000)
+ADD CHECK (tries >= 0);
+ALTER TABLE voice_stats
+ADD CHECK (seconds >= 0);
+ALTER TABLE voice_detailed_sessions
+ADD CHECK (seconds >= 0);
+"""
 
-async def setup_database(pool: asyncpg.Pool):
-    """Создаёт необходимые таблицы в базе данных
+
+async def setup_database(pool: asyncpg.Pool) -> None:
+    """### Функция для настройки БД при запуске бота
+    Создаёт таблицы в случае их отсутствия и обновляет уже существующие, если требуется
 
     Args:
-        pool (asyncpg.Pool): Пул соединений с базой данных
+        pool (:class:`asyncpg.Pool`): Пул соединений с базой данных
     """
-    logger.debug('Настройка базы данных (создание таблиц, если их нет)')
+    logger.info('Создание таблиц в БД')
     try:
         async with pool.acquire() as connection:
             await connection.execute(DATABASE_SCHEMA)
-        logger.info('Настройка БД завершена успешно')
+        logger.info('Таблицы в БД успешно созданы')
     except Exception as e:
-        logger.error(f'Ошибка при настройке базы данных: {e}', exc_info=True)
+        logger.error(f'Ошибка при создании таблиц в БД: {e}', exc_info=True)
+        raise e
+    if len(UPDATES) == 0:
+        return
+    logger.info('Внесение изменений в таблицы в БД')
+    try:
+        async with pool.acquire() as connection:
+            await connection.execute(UPDATES)
+        logger.info('Обновление БД завершено успешно')
+    except Exception as e:
+        logger.error(f'Ошибка при обновлении базы данных: {e}', exc_info=True)
         raise e
 
 
-async def add_xp(user_id: int, guild_id: int, xp: int, pool: asyncpg.Pool):
+async def add_xp(user_id: int, guild_id: int, xp: int, pool: asyncpg.Pool) -> None:
     """### Функция начисления опыта пользователю
     Добавляет пользователю переданное кол-во опыта и обновляет его уровень при необходимости
     (текущий опыт >= требуемого)
 
     Args:
-        user_id (int): ID пользователя
-        guild_id (int): ID сервера
-        xp (int): Количество опыта для добавления
-        pool (asyncpg.Pool): Пул соединений с базой данных
+        user_id (int): ID пользователя, которому начисляется опыт
+        guild_id (int): ID сервера, на котором состоит пользователь
+        xp (int): Количество опыта, которое будет добавлено
+        pool (:class:`asyncpg.Pool`): Пул соединений с базой данных
+
+    Raises:
+        ValueError: Если было передано не положительное количество опыта
     """
     logger.debug(
-        f'Попытка начислить {xp} опыта пользователю {user_id} на {guild_id}')
+        f'Начисление {xp} опыта пользователю {user_id} на сервере {guild_id}')
+    if xp <= 0:
+        raise ValueError(
+            f'Переданное значение добавляемого опыта ({xp}) должно быть положительным!')
     try:
         async with pool.acquire() as connection:
             # Начисляем опыт и получаем обновлённые данные о пользователе
+            logger.debug(
+                f'Обновление данные об уровне пользователя {user_id} в БД')
             row = await connection.fetchrow(
                 """
                 INSERT INTO user_levels (guild_id, user_id, xp)
@@ -133,15 +167,18 @@ async def add_xp(user_id: int, guild_id: int, xp: int, pool: asyncpg.Pool):
                 xp,
             )
             # Получаем данные о текущем опыте и уровне пользователя
+            logger.debug(
+                f'Получение обновлённых данные об уровне пользователя {user_id}')
             curr_xp = row['xp']
             curr_level = row['level']
             # Вычисляем требуемый опыт для следующего уровня
             required_xp = (
                 int(100 * curr_level + 50 * curr_level**1.688) + 9) // 10 * 10
             # Поднимаем уровень пользователя, если опыта достаточно
+            if curr_xp >= required_xp:
+                logger.debug(f'Увеличение уровня пользователя {user_id}')
             level_up = False
             while curr_xp >= required_xp:
-                # Поднимаем уровень пользователя, отнимая требуемый опыт
                 curr_xp -= required_xp
                 curr_level += 1
                 required_xp = (
@@ -149,6 +186,8 @@ async def add_xp(user_id: int, guild_id: int, xp: int, pool: asyncpg.Pool):
                 level_up = True
             # Обновляем уровень и оставшийся опыт в базе данных, если уровень был повышен
             if level_up:
+                logger.debug(
+                    f'Обновление данных об уровне пользователя {user_id}')
                 await connection.execute(
                     """
                     UPDATE user_levels
@@ -160,8 +199,8 @@ async def add_xp(user_id: int, guild_id: int, xp: int, pool: asyncpg.Pool):
                     guild_id,
                     user_id,
                 )
-        logger.info(
-            f'Начислено {xp} опыт пользователю {user_id} на сервере {guild_id}, текущий уровень: {curr_level}, текущий опыт: {curr_xp}'
+        logger.debug(
+            f'{get_plural(xp, ("Начислена", "Начислено", "Начислено"))} {xp} ед. опыта пользователю {user_id} на сервере {guild_id}, текущий уровень: {curr_level}, текущий опыт: {curr_xp}'
         )
     except Exception as e:
         logger.error(f'Ошибка при начислении опыта: {e}', exc_info=True)
@@ -185,39 +224,42 @@ def create_embed(
     Создаёт Embed, используя переданные параметры и стандартный конструктор
 
     Args:
-        title (str | None, optional): Заголовок Embed. По умолчанию имеет значение None.
-        description (str | None, optional): Описание содержимого. По умолчанию имеет значение None.
-        color (discord.Color, optional): Цвет Embed. По умолчанию имеет значение discord.Color.blurple().
-        thumbnail_url (str | None, optional): URL компактной миниатюры. По умолчанию имеет значение None.
-        image_url (str | None, optional): URL изображения Embed. По умолчанию имеет значение None.
-        footer_text (str | None, optional): Текст нижней части Embed. По умолчанию имеет значение None.
-        footer_icon (str | None, optional): URL иконки нижней части Embed. По умолчанию имеет значение None.
-        author_name (str | None, optional): Имя автора. По умолчанию имеет значение None.
-        author_icon (str | None, optional): URL иконки автора. По умолчанию имеет значение None.
-        fields (List[Dict[str, Any]] | None, optional): Поля с содержимым в формате {"name": "...", "value": "...", "inline": True | False}. По умолчанию имеет значение None.
-        timestamp (bool, optional): Временная метка (если имеет значение True, в Embed будет добавлено текущее время). По умолчанию имеет значение True.
+        title (str | None, optional): Заголовок Embed. По умолчанию имеет значение None
+        description (str | None, optional): Описание содержимого. По умолчанию имеет значение None
+        color (:class:`discord.Color`, optional): Цвет Embed. По умолчанию имеет значение discord.Color.blurple()
+        thumbnail_url (str | None, optional): URL компактной миниатюры. По умолчанию имеет значение None
+        image_url (str | None, optional): URL изображения Embed. По умолчанию имеет значение None
+        footer_text (str | None, optional): Текст нижней части Embed. По умолчанию имеет значение None
+        footer_icon (str | None, optional): URL иконки нижней части Embed. По умолчанию имеет значение None
+        author_name (str | None, optional): Имя автора. По умолчанию имеет значение None
+        author_icon (str | None, optional): URL иконки автора. По умолчанию имеет значение None
+        fields (List[Dict[str, Any]] | None, optional): Поля с содержимым в формате {"name": "...", "value": "...", "inline": True | False}. По умолчанию имеет значение None
+        timestamp (bool, optional): Временная метка (если имеет значение True, в Embed будет добавлено текущее время). По умолчанию имеет значение True
 
     Returns:
         discord.Embed: Созданный Embed с заданными параметрами
     """
-
+    logger.debug(
+        f'Создание Embed с параметрами {title}, {description}, {color}')
     embed = discord.Embed(title=title, description=description, color=color)
+
+    if (any([timestamp, thumbnail_url, image_url, footer_text, author_name, fields])):
+        logger.debug(f'Добавление элементов в созданный Embed:\
+{"Текущее время " if timestamp else ""} {"Миниатюра " if thumbnail_url else ""}\
+{"Изображение " if image_url else ""} {"Завершающий текст (подвал) " if footer_text else ""}\
+{"Указание автора " if author_name else ""} {"Иконка автора " if author_icon else ""}\
+{"Текстовые поля" if fields else ""}')
 
     if timestamp:
         embed.timestamp = discord.utils.utcnow()
-
     if thumbnail_url:
         embed.set_thumbnail(url=thumbnail_url)
-
     if image_url:
         embed.set_image(url=image_url)
-
     if footer_text:
         embed.set_footer(text=footer_text, icon_url=footer_icon)
-
     if author_name:
         embed.set_author(name=author_name, icon_url=author_icon)
-
     if fields:
         for field in fields:
             embed.add_field(
@@ -226,96 +268,154 @@ def create_embed(
                 inline=field.get('inline', True),
             )
 
+    logger.debug('Возвращение созданного Embed')
     return embed
 
 
-def user_data(member: discord.Member):
-    """### Функция для получения данных о пользователе, вызвавшем взаимодействие
-    Возвращает строку с id пользователя и его отображаемым именем
+def user_str(member: discord.Member) -> str:
+    """### Функция для получения данных пользователя
+    Возвращает строку с ID пользователя и его отображаемым именем
 
     Args:
         member (:class:`discord.Member`): Участник сервера
 
     Returns:
-        str: Строка с id пользователя и отображаемым именем
+        str: Строка с ID пользователя и его отображаемым именем
     """
+    logger.debug(f'Возврат строки с данными пользователя {member.id}')
     return f'{member.id} ({member.display_name})'
 
 
-def server_data(interaction: discord.Interaction):
-    """### Функция для получения данных о сервере, на котором было вызвано взаимодействие
-    Возвращает строку с id сервера и его названием
+def server_str(guild: discord.Guild | None) -> str:
+    """### Функция для получения данных сервера
+    Возвращает строку с ID сервера и его названием *или* "Нет данных", если сервер не был передан
 
     Args:
-        interaction (discord.Interaction): Объект взаимодействия, содержащий подробные данные об отправленной команде
+        guild (:class:`discord.Guild` | None): Сервер, для которого нужно получить данные
 
     Returns:
-        str: Строка с id сервера и названием или пустая строка, если нет данных о сервере
+        str: Строка с ID сервера и его названием *или* "Нет данных"
     """
-    if not interaction.guild:
-        return 'Нет данных о сервере'
-    return f'{interaction.guild_id} ({interaction.guild.name})'
+    if not guild:
+        logger.debug('Сервер не был передан - возврат строки "Нет данных"')
+        return 'Нет данных'
+    logger.debug(f'Возврат строку с данными сервера {guild.id}')
+    return f'{guild.id} ({guild.name})'
 
 
-async def create_default_user_settings(bot: 'Bot', member: discord.Member):
-    if not bot.db_pool:
-        return
-    async with bot.db_pool.acquire() as con:
-        guild_setting = await con.fetchrow(
-            """
-            SELECT vc_stats_enabled
-            FROM guild_settings
-            WHERE guild_id = $1
-        """,
-            member.guild.id
-        )
-        default = True if guild_setting else False
-        await con.execute(
-            """
-            INSERT INTO user_settings (guild_id, user_id, vc_stats_enabled, vc_stats_privacy)
-            VALUES ($1, $2, $3, $4)
-        """,
-            member.guild.id,
-            member.id,
-            default,
-            True
-        )
+async def create_default_user_settings(pool: asyncpg.Pool, member: discord.Member) -> None:
+    """### Функция для создания записи со стандартными настройками пользователя
+    Создаёт в БД запись со стандартными настройками пользователя
+
+    Args:
+        pool (:class:`asyncpg.Pool`): Пул соединений с БД
+        member (:class:`discord.Member`): Пользователь, для которого требуется создать запись со стандартными настройками
+    """
+    logger.debug(
+        f'Создание настроек по умолчанию для пользователя {member.id}')
+    try:
+        async with pool.acquire() as con:
+            logger.debug(f'Получение настроек для сервера {member.guild.id}')
+            guild_setting = await con.fetchrow(
+                """
+                SELECT vc_stats_enabled
+                FROM guild_settings
+                WHERE guild_id = $1
+            """,
+                member.guild.id
+            )
+            default = True if guild_setting else False
+            logger.debug(
+                'Создание записи со стандартными настройками пользователя')
+            await con.execute(
+                """
+                INSERT INTO user_settings (guild_id, user_id, vc_stats_enabled, vc_stats_privacy)
+                VALUES ($1, $2, $3, $4)
+            """,
+                member.guild.id,
+                member.id,
+                default,
+                True
+            )
+    except Exception as e:
+        logger.error(
+            f'Ошибка при создании записи со стандартными настройками пользователя {member.id}: {e}', exc_info=True)
+        raise e
 
 
-async def create_default_guild_settings(bot: 'Bot', interaction: discord.Interaction):
-    if not bot.db_pool:
-        return
-    async with bot.db_pool.acquire() as con:
-        await con.execute(
-            """
-            INSERT INTO guild_settings (guild_id, only_owner_access, vc_stats_enabled)
-            VALUES ($1, $2, $3)
-        """,
-            interaction.guild_id,
-            True,
-            False
-        )
+async def create_default_guild_settings(pool: asyncpg.Pool, guild: discord.Guild) -> None:
+    """### Функция для создания записи со стандартными настройками сервера
+    Создаёт запись в БД со стандартными настройками сервера
+
+    Args:
+        pool (:class:`asyncpg.Pool`): Пул соединений с БД
+        guild (:class:`discord.Guild`): Сервер, для которого требуется создать запись с настройками
+    """
+    logger.debug(
+        f'Создание записи со стандартными настройками сервера для сервера {guild.id}')
+    try:
+        async with pool.acquire() as con:
+            await con.execute(
+                """
+                INSERT INTO guild_settings (guild_id, only_owner_access, vc_stats_enabled)
+                VALUES ($1, $2, $3)
+            """,
+                guild.id,
+                True,
+                False
+            )
+    except Exception as e:
+        logger.error(
+            f'Ошибка при создании записи со стандартными настройками сервера {guild.id}')
+        raise e
 
 
-def get_plural(val: int, forms: tuple[str, str, str]):
+def get_plural(val: int, forms: tuple[str, str, str]) -> str:
+    """### Функция для получения правильной формы множественного числа
+    Возвращает правильную форму множественного числа для переданного значения (пр. 1 единица, 2 единицы, 5 единиц)
+
+    Args:
+        val (int): Значение, для которого нужно получить форму множественного числа
+        forms (tuple[str, str, str]): Возможные формы множественного числа
+
+    Returns:
+        str: Подходящая форма множественного числа
+    """
+    logger.debug(
+        f'Выбор подходящей формы множественного числа из {forms} для {val}')
     val = abs(val) % 100
     if 11 <= val <= 19:
+        logger.debug(f'Выбрана форма {forms[2]}')
         return forms[2]
     n = val % 10
     if n == 1:
+        logger.debug(f'Выбрана форма {forms[0]}')
         return forms[0]
     if 2 <= n <= 4:
+        logger.debug(f'Выбрана форма {forms[1]}')
         return forms[1]
+    logger.debug(f'Выбрана форма {forms[2]}')
     return forms[2]
 
 
-def readable_time(seconds: int):
+def readable_time(seconds: int) -> str | Literal['Время не указано']:
+    """### Функция для перевода времени в секундах в удобный для чтения формат
+    Конвертирует время в секундах в строку со временем в часах, минутах и секундах
+
+    Returns:
+        str: Строка со временем в часах, минутах и секундах *или* "Время не указано", если было передано недопустимое время
+    """
+    logger.debug(f'Конвертация {seconds} сек. в удобную для чтения строку')
     if seconds <= 0:
+        logger.debug(
+            'Было передано некорректное значение - возвращена строка "Время не указано"')
         return 'Время не указано'
 
     hours, rem = divmod(seconds, 3600)
     minutes, seconds = divmod(rem, 60)
 
+    logger.debug(
+        f'Результат конвертации: {hours} ч. {minutes} мин. {seconds} сек.')
     parts = []
     if hours > 0:
         parts.append(f"{hours} {get_plural(hours, ('час', 'часа', 'часов'))}")
@@ -325,5 +425,4 @@ def readable_time(seconds: int):
     if seconds > 0:
         parts.append(
             f"{seconds} {get_plural(seconds, ('секунда', 'секунды', 'секунд'))}")
-
     return ' '.join(parts)
