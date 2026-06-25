@@ -53,7 +53,6 @@ class Bot(commands.Bot):
         intents.members = True
 
         super().__init__(command_prefix='!', intents=intents, help_command=None)
-        self.db_pool: asyncpg.Pool | None = None
 
     async def setup_hook(self):
         logger.debug(

@@ -1,12 +1,9 @@
 import os
 import logging
-from typing import List, Any, Dict, TYPE_CHECKING, Literal
+from typing import List, Any, Dict, Literal
 import asyncpg
 import discord
 from dotenv import load_dotenv
-
-if TYPE_CHECKING:
-    from launch import Bot
 
 # Инициализируем логгер для этого модуля
 logger = logging.getLogger('slashy.utils')
@@ -90,16 +87,6 @@ CREATE TABLE IF NOT EXISTS voice_detailed_sessions (
 """
 
 UPDATES = """
-ALTER TABLE user_levels
-ADD CHECK (xp >= 0)
-ADD CHECK (level >= 1);
-ALTER TABLE guess_number
-ADD CHECK (number BETWEEN 0 AND 1000)
-ADD CHECK (tries >= 0);
-ALTER TABLE voice_stats
-ADD CHECK (seconds >= 0);
-ALTER TABLE voice_detailed_sessions
-ADD CHECK (seconds >= 0);
 """
 
 
@@ -127,7 +114,6 @@ async def setup_database(pool: asyncpg.Pool) -> None:
         logger.info('Обновление БД завершено успешно')
     except Exception as e:
         logger.error(f'Ошибка при обновлении базы данных: {e}', exc_info=True)
-        raise e
 
 
 async def add_xp(user_id: int, guild_id: int, xp: int, pool: asyncpg.Pool) -> None:
@@ -200,7 +186,8 @@ async def add_xp(user_id: int, guild_id: int, xp: int, pool: asyncpg.Pool) -> No
                     user_id,
                 )
         logger.debug(
-            f'{get_plural(xp, ("Начислена", "Начислено", "Начислено"))} {xp} ед. опыта пользователю {user_id} на сервере {guild_id}, текущий уровень: {curr_level}, текущий опыт: {curr_xp}'
+            f'{get_plural(xp, ("Начислена", "Начислено", "Начислено"))} {xp} ед. опыта пользователю {user_id} на сервере {guild_id}, '
+            f'текущий уровень: {curr_level}, текущий опыт: {curr_xp}'
         )
     except Exception as e:
         logger.error(f'Ошибка при начислении опыта: {e}', exc_info=True)
@@ -299,8 +286,22 @@ def server_str(guild: discord.Guild | None) -> str:
     if not guild:
         logger.debug('Сервер не был передан - возврат строки "Нет данных"')
         return 'Нет данных'
-    logger.debug(f'Возврат строку с данными сервера {guild.id}')
+    logger.debug(f'Возврат строки с данными сервера {guild.id}')
     return f'{guild.id} ({guild.name})'
+
+
+def channel_str(channel: discord.VoiceChannel | discord.StageChannel) -> str:
+    """### Функция для получения данных голосового канала
+    Возвращает строку с ID канала и его названием
+
+    Args:
+        channel (:class:`discord.VoiceChannel` | :class:`discord.StageChannel`): Голосовой канал, для которого нужно получить данные
+
+    Returns:
+        str: Строка с ID канала и его названием
+    """
+    logger.debug(f'Возврат строки с данными канала {channel.id}')
+    return f'{channel.id} ({channel.name})'
 
 
 async def create_default_user_settings(pool: asyncpg.Pool, member: discord.Member) -> None:
