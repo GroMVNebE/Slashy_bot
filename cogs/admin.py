@@ -3,7 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import logging
 from typing import TYPE_CHECKING, Literal
-from utils import create_embed, get_env, user_str, server_str, create_default_user_settings, create_default_guild_settings
+from utils import *
 
 # Подлючаем типизацию для класса Bot из launch.py, избегая циклического импорта
 # Нужно для правильного определения типов в IDE
@@ -54,7 +54,7 @@ class ModuleSelect(discord.ui.Select):
         if not type(interaction.user) is discord.Member:
             return
         logger.debug(
-            f'Пользователь {user_str(interaction.user)} выбрал {self.values[0]} в ModuleSelect')
+            f'Пользователь {get_info(interaction.user)} выбрал {self.values[0]} в ModuleSelect')
         # Получаем имя выбранного модуля и формируем путь к нему
         module_name = self.values[0]
         cog_path = f'cogs.{module_name}'
@@ -140,7 +140,7 @@ class ActionSelect(discord.ui.Select):
         if not type(interaction.user) is discord.Member:
             return
         logger.debug(
-            f'Пользователь {user_str(interaction.user)} выбрал {self.values[0]} в ActionSelect')
+            f'Пользователь {get_info(interaction.user)} выбрал {self.values[0]} в ActionSelect')
         # Получаем выбранное действие
         action = self.values[0]
         # Если нужно выключить бота
@@ -154,7 +154,7 @@ class ActionSelect(discord.ui.Select):
             await interaction.response.edit_message(embed=embed, view=None)
             # Логгируем выключение бота
             logger.info(
-                f'Пользователь {user_str(interaction.user)} выключил бота')
+                f'Пользователь {get_info(interaction.user)} выключил бота')
             await self.bot.close()
             # Закрываем соединения с БД и соединение клиента с Discord
             if self.bot.db_pool:
@@ -272,7 +272,7 @@ class SettingChoiceButton(discord.ui.Button):
         if not type(interaction.user) is discord.Member:
             return
         logger.debug(
-            f'Пользователь {user_str(interaction.user)} выбрал опцию {self.choice_name} для {self.setting["code"]}')
+            f'Пользователь {get_info(interaction.user)} выбрал опцию {self.choice_name} для {self.setting["code"]}')
 
         if not self.bot.db_pool:
             return
@@ -514,7 +514,7 @@ class ManageSettings(discord.ui.View):
         except Exception as e:
             logger.error(
                 f'Ошибка при отрисовке страницы с настройками категории {self.category} для пользователя '
-                f'{user_str(interaction.user)} на сервере {server_str(interaction.guild)}: {e}', exc_info=True)
+                f'{get_info(interaction.user)} на сервере {get_info(interaction.guild)}: {e}', exc_info=True)
             embed = create_embed(
                 title='Ошибка!',
                 description='Произошла ошибка при отрисовке страницы с настройками',
@@ -557,7 +557,7 @@ class UserSettingsButton(discord.ui.Button):
         if not type(interaction.user) is discord.Member:
             return
         logger.debug(
-            f'Пользователь {user_str(interaction.user)} выбрал категорию "Пользовательские настройки"')
+            f'Пользователь {get_info(interaction.user)} выбрал категорию "Пользовательские настройки"')
         view = ManageSettings(self.bot, 'user')
         await view.draw_page(interaction)
 
@@ -573,7 +573,7 @@ class ServerSettingsButton(discord.ui.Button):
         if not type(interaction.user) is discord.Member:
             return
         logger.debug(
-            f'Пользователь {user_str(interaction.user)} выбрал категорию "Настройки сервера"')
+            f'Пользователь {get_info(interaction.user)} выбрал категорию "Настройки сервера"')
         view = ManageSettings(self.bot, 'server')
         await view.draw_page(interaction)
 
@@ -687,7 +687,7 @@ class Admin(commands.Cog):
         if not type(interaction.user) is discord.Member:
             return
         logger.info(
-            f'Пользователь {user_str(interaction.user)} вызвал настройки бота на сервере {server_str(interaction.guild)}')
+            f'Пользователь {get_info(interaction.user)} вызвал настройки бота на сервере {get_info(interaction.guild)}')
 
         await interaction.response.defer(ephemeral=True)
 

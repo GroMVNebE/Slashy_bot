@@ -84,7 +84,7 @@ class Events(commands.Cog):
                 'Сообщение отправлено не на сервере - пропуск обработки')
             return
         logger.debug(
-            f'Обработка отправленного сообщения от пользователя {user_str(message.author)} на сервере {server_str(message.author.guild)}')
+            f'Обработка отправленного сообщения от пользователя {get_info(message.author)} на сервере {get_info(message.author.guild)}')
         # Пропускаем сообщения от ботов
         if message.author.bot:
             logger.debug(
@@ -111,7 +111,7 @@ class Events(commands.Cog):
         """
         logger.debug(
             f'Начато выполнение get_valid_voice_members - получение валидных пользователей (не являющихся ботами) '
-            f'для голосового канала {channel.id} ({channel.name}) на сервере {server_str(channel.guild)}')
+            f'для голосового канала {channel.id} ({channel.name}) на сервере {get_info(channel.guild)}')
         # Если нужны все валидные пользователи - отсекаем ботов
         if not filtered:
             logger.debug(
@@ -144,12 +144,12 @@ class Events(commands.Cog):
                 # Пропускаем ботов
                 if m.bot:
                     logger.debug(
-                        f'Пользователь {user_str(m)} - бот, пропускаем')
+                        f'Пользователь {get_info(m)} - бот, пропускаем')
                     continue
                 # Добавляем пользователя, если у него не указан запрет на сбор статистики
                 if user_settings_dict.get(m.id, True) is True:
                     logger.debug(
-                        f'Пользователь {user_str(m)} не указал запрет на сбор статистики времени "общения" - '
+                        f'Пользователь {get_info(m)} не указал запрет на сбор статистики времени "общения" - '
                         'добавляем в список валидных пользователей')
                     valid_members.append(m)
             ln = len(valid_members)
@@ -254,12 +254,12 @@ class Events(commands.Cog):
         Args:
             member (:class:`discord.Member`): Участник сервера, для которого нужно создать сессию общения
         """
-        logger.debug(f'Выполнение start_tracking для {user_str(member)}:')
+        logger.debug(f'Выполнение start_tracking для {get_info(member)}:')
         # Если у пользователя уже есть активная сессия (пр. к каналу подключился ещё один участник)
         # Новую сессию создавать не требуется - пропускаем
         if member.id in self.active_sessions:
             logger.debug(
-                f'У {user_str(member)} уже есть активная сессия общения - пропуск start_tracking')
+                f'У {get_info(member)} уже есть активная сессия общения - пропуск start_tracking')
             return
         # Если пользователь есть в pending_sessions - он вернулся в голосовой канал
         # Переносим в active_sessions
@@ -279,7 +279,7 @@ class Events(commands.Cog):
             'guild_id': member.guild.id
         }
         logger.debug(
-            f'Создана новая сессия для пользователя {user_str(member)}')
+            f'Создана новая сессия для пользователя {get_info(member)}')
 
     async def stop_tracking(self, member: discord.Member, grace_period: int = 180):
         """### Функция для завершения отслеживания сессии общения
@@ -289,7 +289,7 @@ class Events(commands.Cog):
             member (:class:`discord.Member`): Участник сервера, сессию общения которого нужно прекратить отслеживать
             grace_period (int, optional): Период до переноса данных о сессии общения в БД, по умолчанию составляет 3 минуты (180 сек.)
         """
-        logger.debug(f'Выполнение stop_tracking для {user_str(member)}')
+        logger.debug(f'Выполнение stop_tracking для {get_info(member)}')
         # Удаляем сессию общения пользователя из списка активных сессий
         session: dict = self.active_sessions.pop(member.id, None)
         # Если у пользователя была сессия, переносим её в список истекающих
@@ -298,7 +298,7 @@ class Events(commands.Cog):
             session['left_at'] = time.time()
             self.pending_sessions[member.id] = session
             logger.debug(
-                f'Сессия пользователя {user_str(member)} отправлена в pending_sessions на {grace_period} сек.')
+                f'Сессия пользователя {get_info(member)} отправлена в pending_sessions на {grace_period} сек.')
 
     # Логика отслеживания сессий общения:
     # === Запуск отслеживания ===
@@ -320,7 +320,7 @@ class Events(commands.Cog):
             after (:class:`discord.VoiceState`): Состояние голосового канала ПОСЛЕ события
         """
         logger.debug(
-            f'Обработка изменения голосового канала, вызванного {user_str(member)} на сервере {server_str(member.guild)}')
+            f'Обработка изменения голосового канала, вызванного {get_info(member)} на сервере {get_info(member.guild)}')
         # Пропускаем ботов
         if member.bot:
             logger.debug('Пользователь - бот, пропуск обработки')
@@ -335,7 +335,7 @@ class Events(commands.Cog):
         # Обрабатываем отключение пользователя
         if before.channel:
             logger.debug(
-                f'Пользователь {user_str(member)} покинул канал {channel_str(before.channel)}')
+                f'Пользователь {get_info(member)} покинул канал {get_info(before.channel)}')
             # Если пользователь не подключился к другому каналу - прекращаем отслеживать его сессию общения
             if after.channel is None:
                 await self.stop_tracking(member)
@@ -343,7 +343,7 @@ class Events(commands.Cog):
             remaining_members = await self.get_valid_voice_members(before.channel)
             if len(remaining_members) < 2:
                 logger.debug(
-                    f'В канале {channel_str(before.channel)} осталось меньше 2 человек. '
+                    f'В канале {get_info(before.channel)} осталось меньше 2 человек. '
                     'Остановка отслеживания времени общения для оставшегося участника (если он есть)')
                 for m in remaining_members:
                     await self.stop_tracking(m)
@@ -352,19 +352,19 @@ class Events(commands.Cog):
         # Обрабатываем подклчючение пользователя
         if after.channel:
             logger.debug(
-                f'Пользователь {user_str(member)} подключился к каналу {channel_str(after.channel)}')
+                f'Пользователь {get_info(member)} подключился к каналу {get_info(after.channel)}')
             # Начинаем сессию общения для всех пользователей в канале, если в канале оказалось хотя бы 2 валидных пользователя (не бота)
             # (Проверяя, что у пользователя ещё нет сессии общения)
             all_channel_members = await self.get_valid_voice_members(after.channel)
             if len(all_channel_members) >= 2:
                 logger.debug(
-                    f'В канале {channel_str(after.channel)} как минимум 2 человека. Запуск отслеживания сессий общения')
+                    f'В канале {get_info(after.channel)} как минимум 2 человека. Запуск отслеживания сессий общения')
                 allowed_members = await self.get_valid_voice_members(after.channel, filtered=True)
                 for m in allowed_members:
                     await self.start_tracking(m)
             else:
                 logger.debug(
-                    f'В канале {channel_str(after.channel)} меньше 2 человек. Отслеживание сессий общения не требуется')
+                    f'В канале {get_info(after.channel)} меньше 2 человек. Отслеживание сессий общения не требуется')
 
     @tasks.loop(minutes=15)
     async def save_sessions_task(self):
@@ -392,7 +392,9 @@ class Events(commands.Cog):
         """
         now = time.time()
 
+        logger.debug('Проверка истекающих сессий...')
         for user_id, data in list(self.pending_sessions.items()):
+            logger.debug(f'{user_id} - {int(now)}/{int(data["expires_at"])}')
             if now >= data['expires_at']:
                 await self.save_time(user_id, data, False)
                 self.pending_sessions.pop(user_id, None)

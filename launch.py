@@ -109,8 +109,8 @@ class Bot(commands.Bot):
         # Если ошибка - ограничение по частоте использования команды
         if isinstance(error, discord.app_commands.CommandOnCooldown):
             logger.debug(
-                f'Пользователь {user_str(interaction.user)} попытался использовать команду {interaction.command} \
-до истечения времени ожидания ({error.retry_after:.1f} сек.) на сервере {server_str(interaction.guild)}')
+                f'Пользователь {get_info(interaction.user)} попытался использовать команду {interaction.command} \
+до истечения времени ожидания ({error.retry_after:.1f} сек.) на сервере {get_info(interaction.guild)}')
             # Отправляем пользователю сообщение с информацией о том,
             # Сколько времени осталось до возможности повторного использования команды
             embed = create_embed(

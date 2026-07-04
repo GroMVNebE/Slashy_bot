@@ -86,8 +86,7 @@ CREATE TABLE IF NOT EXISTS voice_detailed_sessions (
 );
 """
 
-UPDATES = """
-"""
+UPDATES = None
 
 
 async def setup_database(pool: asyncpg.Pool) -> None:
@@ -105,7 +104,7 @@ async def setup_database(pool: asyncpg.Pool) -> None:
     except Exception as e:
         logger.error(f'Ошибка при создании таблиц в БД: {e}', exc_info=True)
         raise e
-    if len(UPDATES) == 0:
+    if UPDATES is None:
         return
     logger.info('Внесение изменений в таблицы в БД')
     try:
@@ -259,49 +258,21 @@ def create_embed(
     return embed
 
 
-def user_str(member: discord.Member) -> str:
-    """### Функция для получения данных пользователя
-    Возвращает строку с ID пользователя и его отображаемым именем
+def get_info(object: discord.Member | discord.Guild | discord.VoiceChannel | discord.StageChannel | None) -> str:
+    """### Функция для получения информации об объекте
+    Возвращает хэш ID пользователя/сервера/канала  
+    *Используется для упрощения отладки*
 
     Args:
-        member (:class:`discord.Member`): Участник сервера
+        object (discord.Member | discord.Guild | discord.VoiceChannel | discord.StageChannel | None): Объект, для которого нужно получить строку с информацией
 
     Returns:
-        str: Строка с ID пользователя и его отображаемым именем
+        str: Строка с информацией о переданном объекте
     """
-    logger.debug(f'Возврат строки с данными пользователя {member.id}')
-    return f'{member.id} ({member.display_name})'
-
-
-def server_str(guild: discord.Guild | None) -> str:
-    """### Функция для получения данных сервера
-    Возвращает строку с ID сервера и его названием *или* "Нет данных", если сервер не был передан
-
-    Args:
-        guild (:class:`discord.Guild` | None): Сервер, для которого нужно получить данные
-
-    Returns:
-        str: Строка с ID сервера и его названием *или* "Нет данных"
-    """
-    if not guild:
-        logger.debug('Сервер не был передан - возврат строки "Нет данных"')
+    logger.debug(f'Получение строки с информацией для объекта {object}')
+    if object is None:
         return 'Нет данных'
-    logger.debug(f'Возврат строки с данными сервера {guild.id}')
-    return f'{guild.id} ({guild.name})'
-
-
-def channel_str(channel: discord.VoiceChannel | discord.StageChannel) -> str:
-    """### Функция для получения данных голосового канала
-    Возвращает строку с ID канала и его названием
-
-    Args:
-        channel (:class:`discord.VoiceChannel` | :class:`discord.StageChannel`): Голосовой канал, для которого нужно получить данные
-
-    Returns:
-        str: Строка с ID канала и его названием
-    """
-    logger.debug(f'Возврат строки с данными канала {channel.id}')
-    return f'{channel.id} ({channel.name})'
+    return f'{hash(object.id)}'
 
 
 async def create_default_user_settings(pool: asyncpg.Pool, member: discord.Member) -> None:
