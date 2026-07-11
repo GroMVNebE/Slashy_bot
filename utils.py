@@ -4,6 +4,7 @@ from typing import List, Any, Dict, Literal
 import asyncpg
 import discord
 from dotenv import load_dotenv
+import hashlib
 
 # Инициализируем логгер для этого модуля
 logger = logging.getLogger('slashy.utils')
@@ -76,17 +77,15 @@ CREATE TABLE IF NOT EXISTS voice_max_sessions (
     PRIMARY KEY (guild_id, user_id, day)
 );
 CREATE TABLE IF NOT EXISTS voice_detailed_sessions (
-    session_id SERIAL PRIMARY KEY,
-    guild_id BIGINT,
-    user_id BIGINT,
+    session_id BIGSERIAL PRIMARY KEY,
+    guild_id TEXT,
+    user_id TEXT,
     start_time TIMESTAMP WITH TIME ZONE,
     end_time TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     seconds INTEGER CHECK (seconds >= 0),
     CONSTRAINT check_timestamp CHECK (end_time > start_time)
 );
 """
-
-UPDATES = None
 
 
 async def setup_database(pool: asyncpg.Pool) -> None:
@@ -104,15 +103,6 @@ async def setup_database(pool: asyncpg.Pool) -> None:
     except Exception as e:
         logger.error(f'Ошибка при создании таблиц в БД: {e}', exc_info=True)
         raise e
-    if UPDATES is None:
-        return
-    logger.info('Внесение изменений в таблицы в БД')
-    try:
-        async with pool.acquire() as connection:
-            await connection.execute(UPDATES)
-        logger.info('Обновление БД завершено успешно')
-    except Exception as e:
-        logger.error(f'Ошибка при обновлении базы данных: {e}', exc_info=True)
 
 
 async def add_xp(user_id: int, guild_id: int, xp: int, pool: asyncpg.Pool) -> None:
@@ -269,10 +259,13 @@ def get_info(object: discord.Member | discord.Guild | discord.VoiceChannel | dis
     Returns:
         str: Строка с информацией о переданном объекте
     """
-    logger.debug(f'Получение строки с информацией для объекта {object}')
+    logger.debug(f'Получение строки с информацией для объекта {type(object)}')
     if object is None:
         return 'Нет данных'
-    return f'{hash(object.id)}'
+    bytes = object.id.to_bytes(
+        (object.id.bit_length() + 7) // 8 or 1, byteorder='big')
+    hash_code = hashlib.sha256(bytes).hexdigest()
+    return f'{hash_code}'
 
 
 async def create_default_user_settings(pool: asyncpg.Pool, member: discord.Member) -> None:

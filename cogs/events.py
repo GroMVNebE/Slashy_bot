@@ -116,7 +116,7 @@ class Events(commands.Cog):
         if not filtered:
             logger.debug(
                 'Получение всех валидных пользователей без фильтрации...')
-            return [m for m in channel.members if not m.bot]
+            return [m for m in channel.members if not m.bot and m.voice is not None and not (m.voice.self_deaf or m.voice.deaf)]
         # Если нужно проверить разрешения на сбор статистики
         async with self.bot.db_pool.acquire() as conn:
             logger.debug(
@@ -141,8 +141,8 @@ class Events(commands.Cog):
             # Собираем список пользователей, у которых разрешён сбор статистики
             valid_members = []
             for m in channel.members:
-                # Пропускаем ботов
-                if m.bot:
+                # Пропускаем ботов или пользователей, у которых отключен звук
+                if m.bot or (m.voice is not None and (m.voice.deaf or m.voice.self_deaf)):
                     logger.debug(
                         f'Пользователь {get_info(m)} - бот, пропускаем')
                     continue
@@ -231,15 +231,21 @@ class Events(commands.Cog):
                     """
                     await conn.execute(
                         f'{max_sessions_query}',
-                        user_id, guild_id, ssn_start, ssn_duration
+                        user_id, guild_id, ssn_start.date(), ssn_duration
                     )
                     if ssn_duration > 60*5:
+                        uid_bytes = user_id.to_bytes(
+                            (user_id.bit_length() + 7) // 8 or 1, byteorder='big')
+                        gid_bytes = guild_id.to_bytes(
+                            (guild_id.bit_length() + 7) // 8 or 1, byteorder='big')
+                        uid_hash_code = hashlib.sha256(uid_bytes).hexdigest()
+                        gid_hash_code = hashlib.sha256(gid_bytes).hexdigest()
                         await conn.execute(
                             """
                             INSERT INTO voice_detailed_sessions(user_id, guild_id, start_time, end_time, seconds)
                             VALUES ($1, $2, $3, $4, $5);
                         """,
-                            user_id, guild_id, ssn_start, ssn_end, ssn_duration
+                            uid_hash_code, gid_hash_code, ssn_start, ssn_end, ssn_duration
                         )
                 logger.debug(
                     f'Сохранение данных {"периода" if autosave else "сессии"} "общения" пользователя {user_id} в БД: Успешно')
@@ -325,36 +331,58 @@ class Events(commands.Cog):
         if member.bot:
             logger.debug('Пользователь - бот, пропуск обработки')
             return
-        # Пропускаем события внутри одного канала (мут, включение камеры и т.п.)
-        if before.channel == after.channel:
-            logger.debug(
-                'Канал не изменился (событие не связано с подключением/отключением пользователя), пропуск обработки')
+
+        # Обрабатываем случай изменения канала пользователем
+        if after.channel != before.channel:
+            # Если пользователь отключился совсем
+            if after.channel is None:
+                logger.debug(
+                    f'Пользователь {get_info(member)} отключился от голосового канала {get_info(before.channel)}')
+                await self.stop_tracking(member)
+            # Если пользователь сменил канал / подключился к каналу
+            else:
+                logger.debug(
+                    f'Пользователь {get_info(member)} сменил голосовой канал с {get_info(before.channel)} на {get_info(after.channel)}')
+                all_channel_members = await self.get_valid_voice_members(after.channel)
+                if len(all_channel_members) >= 2:
+                    logger.debug(
+                        f'В канале {get_info(after.channel)} как минимум 2 человека. Запуск отслеживания сессий общения')
+                    allowed_members = await self.get_valid_voice_members(after.channel, filtered=True)
+                    for m in allowed_members:
+                        await self.start_tracking(m)
+                else:
+                    logger.debug(
+                        'В новом канале недостаточно пользователей - прекращение сессии "общения"')
+                    await self.stop_tracking(member)
+            # Если пользователь отключился от канала, проверяем оставшихся пользователей
+            if before.channel is not None:
+                remaining_members = await self.get_valid_voice_members(before.channel)
+                if len(remaining_members) < 2:
+                    logger.debug(
+                        f'В канале {get_info(before.channel)} осталось меньше 2 человек. '
+                        'Остановка отслеживания времени общения для оставшегося участника (если он есть)')
+                    for m in remaining_members:
+                        await self.stop_tracking(m)
             return
 
-        # Текущий канал изменился (before != after), а значит, пользователь отключился от какого-то канала
-        # Обрабатываем отключение пользователя
-        if before.channel:
+        # Если у пользователя отключен звук
+        if after.channel and (after.self_deaf or after.deaf):
             logger.debug(
-                f'Пользователь {get_info(member)} покинул канал {get_info(before.channel)}')
-            # Если пользователь не подключился к другому каналу - прекращаем отслеживать его сессию общения
-            if after.channel is None:
-                await self.stop_tracking(member)
-            # Если в канале остался только один валидный пользователь (не бот) - прекращаем отслеживать и его сессию "общения"
-            remaining_members = await self.get_valid_voice_members(before.channel)
+                f'У пользователя {get_info(member)} в голосовом канале {get_info(after.channel)} выключен звук')
+            await self.stop_tracking(member)
+            remaining_members = await self.get_valid_voice_members(after.channel)
             if len(remaining_members) < 2:
                 logger.debug(
-                    f'В канале {get_info(before.channel)} осталось меньше 2 человек. '
+                    f'В канале {get_info(after.channel)} осталось меньше 2 человек. '
                     'Остановка отслеживания времени общения для оставшегося участника (если он есть)')
                 for m in remaining_members:
                     await self.stop_tracking(m)
+            return
 
-        # Есть данные о новом канале, значит, пользователь подключился к какому-то каналу
-        # Обрабатываем подклчючение пользователя
-        if after.channel:
+        # Если у пользователя включен звук
+        if after.channel and not (after.self_deaf or after.deaf):
             logger.debug(
-                f'Пользователь {get_info(member)} подключился к каналу {get_info(after.channel)}')
-            # Начинаем сессию общения для всех пользователей в канале, если в канале оказалось хотя бы 2 валидных пользователя (не бота)
-            # (Проверяя, что у пользователя ещё нет сессии общения)
+                f'У пользователя {get_info(member)} в голосовом канале {get_info(after.channel)} включен звук')
             all_channel_members = await self.get_valid_voice_members(after.channel)
             if len(all_channel_members) >= 2:
                 logger.debug(
@@ -362,9 +390,7 @@ class Events(commands.Cog):
                 allowed_members = await self.get_valid_voice_members(after.channel, filtered=True)
                 for m in allowed_members:
                     await self.start_tracking(m)
-            else:
-                logger.debug(
-                    f'В канале {get_info(after.channel)} меньше 2 человек. Отслеживание сессий общения не требуется')
+            return
 
     @tasks.loop(minutes=15)
     async def save_sessions_task(self):
