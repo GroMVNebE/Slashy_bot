@@ -392,7 +392,7 @@ class General(commands.Cog):
         if not type(interaction.user) is discord.Member:
             return
         logger.info(
-            f'Пользователь {user_data(interaction.user)} использовал команду /guess')
+            f'Пользователь {get_info(interaction.user)} использовал команду /guess')
         pool = self.bot.db_pool
         if not pool:
             logger.warning(
@@ -487,7 +487,7 @@ class General(commands.Cog):
         if not type(interaction.user) is discord.Member:
             return
         logger.info(
-            f'Пользователь {user_data(interaction.user)} запросил генерацию случайного числа \
+            f'Пользователь {get_info(interaction.user)} запросил генерацию случайного числа \
 в диапазоне [{мин}; {макс}]')
         # Проверяем, если начало и конец диапазона совпадают
         if мин == макс:
@@ -834,7 +834,7 @@ class General(commands.Cog):
             return
 
         logger.info(
-            f'Пользователь {user_data(interaction.user)} вызвал команду /voice')
+            f'Пользователь {get_info(interaction.user)} вызвал команду /voice')
         target_member = member or interaction.user
         # Проверяем условия
         # - На сервере включен сбор статистики времени "общения"
@@ -866,7 +866,7 @@ class General(commands.Cog):
                     target_member.id
                 )
                 if not user_set:
-                    await create_default_user_settings(self.bot, target_member)
+                    await create_default_user_settings(self.bot.db_pool, target_member)
                     user_set = await con.fetchrow(
                         """
                         SELECT vc_stats_enabled, vc_stats_privacy 

@@ -31,15 +31,17 @@ file_handler.suffix = '%Y-%m-%d'
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(log_formatter)
 
-# Инициализируем логгер
-logging.basicConfig(level=logging.DEBUG, handlers=[
-                    file_handler, console_handler])
-
 logger = logging.getLogger('slashy')
 
 # Получаем переменные окружения
 TOKEN = get_env('DISCORD_TOKEN')
 DATABASE_URL = get_env('DATABASE_URL')
+LOG_LEVEL = get_env('LOGGER_LEVEL', 'INFO')
+
+levels_map = logging.getLevelNamesMapping()
+# Инициализируем логгер
+logging.basicConfig(level=levels_map.get(LOG_LEVEL, logging.INFO), handlers=[
+                    file_handler, console_handler])
 
 
 class Bot(commands.Bot):
@@ -51,7 +53,6 @@ class Bot(commands.Bot):
         intents.members = True
 
         super().__init__(command_prefix='!', intents=intents, help_command=None)
-        self.db_pool: asyncpg.Pool | None = None
 
     async def setup_hook(self):
         logger.debug(
@@ -108,8 +109,8 @@ class Bot(commands.Bot):
         # Если ошибка - ограничение по частоте использования команды
         if isinstance(error, discord.app_commands.CommandOnCooldown):
             logger.debug(
-                f'Пользователь {user_data(interaction.user)} попытался использовать команду {interaction.command} \
-до истечения времени ожидания ({error.retry_after:.1f} сек.) на сервере {server_data(interaction)}')
+                f'Пользователь {get_info(interaction.user)} попытался использовать команду {interaction.command} \
+до истечения времени ожидания ({error.retry_after:.1f} сек.) на сервере {get_info(interaction.guild)}')
             # Отправляем пользователю сообщение с информацией о том,
             # Сколько времени осталось до возможности повторного использования команды
             embed = create_embed(
