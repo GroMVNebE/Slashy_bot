@@ -5,7 +5,8 @@ import asyncpg
 import discord
 import logging
 import io
-from datetime import timedelta, date
+from datetime import timedelta, date, datetime
+from zoneinfo import ZoneInfo
 from PIL import Image, ImageDraw, ImageFont
 from discord import app_commands
 from discord.ext import commands
@@ -31,7 +32,8 @@ class General(commands.Cog):
     - Команда :meth:`lvl` для вывода карточки с уровнем пользователя
     - Команда :meth:`guess` для игры "Угадай число"
     - Команда :meth:`rand` для генерации случайного числа в заданном диапазоне
-    - Команда :meth:`voice` для вывода статистики времени \"общения\""""
+    - Команда :meth:`voice` для вывода статистики времени \"общения\"
+    - Команда :meth:`sessions` для вывода детальных сессий \"общения\""""
 
     def __init__(self, bot: "Bot"):
         self.bot = bot
@@ -909,6 +911,199 @@ class General(commands.Cog):
         view = self.VoiceStatsView(self.bot, target_member, interaction)
         logger.debug('Запускаем отрисовку графика')
         await view.update_stats(interaction)
+
+    class VoiceDetailedSessionsView(discord.ui.View):
+        """### UI-представление для просмотра детальных сессий "общения" по дням
+        Содержит кнопки для изменения отображаемого периода"""
+
+        def __init__(self, bot: 'Bot', user: discord.Member):
+            """### UI-представление для просмотра детальных сессий "общения" по дням
+            Содержит кнопки для изменения отображаемого периода
+
+            Args:
+                bot (:class:`Bot`): Запущенный Дискорд-бот
+                user (:class:`discord.Member`): Участник Дискорд-сервера
+            """
+            super().__init__(timeout=180.0)
+            self.bot = bot
+            self.user = user
+            self.day_offset = 0
+
+        async def update_message(self, interaction: discord.Interaction):
+            target_date = date.today() + timedelta(days=self.day_offset)
+
+            sessions, total_seconds = await self.get_daily_sessions(target_date)
+
+            plot_file = self.generate_daily_plot(
+                target_date, sessions, total_seconds)
+
+            readable_date = target_date.strftime('%d.%m.%Y')
+            total_hours = total_seconds / 3600
+
+            embed = discord.Embed(
+                title=f"Детализированные сессии — {self.user.display_name}",
+                description=f"**Дата:** {readable_date}\n**Всего за день:** {total_hours:.2f} ч. ({readable_time(total_seconds)})",
+                color=0x5865F2
+            )
+            embed.set_image(url="attachment://daily_plot.png")
+
+            file = discord.File(plot_file, filename="daily_plot.png")
+
+            await interaction.response.edit_message(embed=embed, attachments=[file], view=self)
+
+        async def get_daily_sessions(self, target_date: date):
+            start_of_day = datetime.combine(
+                target_date, datetime.min.time(), tzinfo=ZoneInfo("Europe/Moscow"))
+            end_of_day = datetime.combine(
+                target_date, datetime.max.time(), tzinfo=ZoneInfo("Europe/Moscow"))
+
+            async with self.bot.db_pool.acquire() as con:
+                user_id = self.user.id
+                guild_id = self.user.guild.id
+                uid_bytes = user_id.to_bytes(
+                    (user_id.bit_length() + 7) // 8 or 1, byteorder='big')
+                gid_bytes = guild_id.to_bytes(
+                    (guild_id.bit_length() + 7) // 8 or 1, byteorder='big')
+                uid_hash_code = hashlib.sha256(uid_bytes).hexdigest()
+                gid_hash_code = hashlib.sha256(gid_bytes).hexdigest()
+                rows = await con.fetch(
+                    """
+                    SELECT start_time, end_time, seconds
+                    FROM voice_detailed_sessions
+                    WHERE guild_id = $1 AND user_id = $2 AND start_time >= $3 AND start_time <= $4
+                    ORDER BY start_time ASC
+                    """,
+                    gid_hash_code,
+                    uid_hash_code,
+                    start_of_day,
+                    end_of_day
+                )
+
+            sessions = []
+            total_seconds = 0
+
+            for row in rows:
+                st_local = row['start_time'].astimezone()
+                et_local = row['end_time'].astimezone()
+
+                sessions.append((st_local, et_local))
+                total_seconds += row['seconds']
+
+            return sessions, total_seconds
+
+        def generate_daily_plot(self, target_date: date, sessions: list[tuple[datetime, datetime]], total_seconds: int) -> io.BytesIO:
+            fig, ax = plt.subplots(figsize=(10, 3.5), dpi=120)
+
+            fig.patch.set_facecolor('#2b2d31')
+            ax.set_facecolor('#1e1f22')
+
+            ax.grid(axis='x', which='both', linestyle='--',
+                    alpha=0.15, color='#ffffff')
+
+            for spine in ax.spines.values():
+                spine.set_visible(False)
+
+            ax.tick_params(colors='#dbdee1', labelsize=9)
+
+            x_min = datetime.combine(target_date, datetime.min.time())
+            x_max = datetime.combine(target_date, datetime.max.time())
+            ax.set_xlim(x_min, x_max)
+
+            import matplotlib.dates as mdates
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+            ax.xaxis.set_major_locator(
+                mdates.HourLocator(interval=2))
+            ax.xaxis.set_minor_locator(mdates.MinuteLocator(interval=30))
+
+            ax.set_ylim(0, 2)
+            ax.get_yaxis().set_visible(False)
+
+            if not sessions:
+                ax.text(0.5, 0.5, 'Нет данных о сессиях за этот день',
+                        color='#abcdef', ha='center', va='center', fontsize=12, transform=ax.transAxes)
+            else:
+                xranges = []
+                for st, et in sessions:
+                    st_naive = st.replace(tzinfo=None)
+                    et_naive = et.replace(tzinfo=None)
+
+                    start_num = mdates.date2num(st_naive)
+                    duration_num = mdates.date2num(et_naive) - start_num
+                    xranges.append((start_num, duration_num))
+
+                ax.broken_barh(xranges, (0.75, 0.5), facecolors='#5865F2',
+                               edgecolor='#4752C4', linewidth=1, alpha=0.9)
+
+                for st, et in sessions:
+                    st_naive = st.replace(tzinfo=None)
+                    et_naive = et.replace(tzinfo=None)
+
+                    center_time = st_naive + (et_naive - st_naive) / 2
+
+                    time_label = f"{st.strftime('%H:%M')}-{et.strftime('%H:%M')}"
+
+                    if (et - st).total_seconds() > 1200:
+                        ax.text(
+                            mdates.date2num(center_time),
+                            1.3,
+                            time_label,
+                            ha='center',
+                            va='bottom',
+                            color='#ffffff',
+                            fontsize=8,
+                            fontweight='bold',
+                            bbox=dict(facecolor='#2b2d31', alpha=0.7,
+                                      edgecolor='none', boxstyle='round,pad=0.2')
+                        )
+
+            data_stream = io.BytesIO()
+            plt.savefig(data_stream, format='png', bbox_inches='tight',
+                        facecolor=fig.get_facecolor(), dpi=120)
+            plt.close(fig)
+            data_stream.seek(0)
+            return data_stream
+
+        @discord.ui.button(label='', style=discord.ButtonStyle.primary, emoji='⬅️')
+        async def prev_day(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.day_offset -= 1
+            await self.update_message(interaction)
+
+        @discord.ui.button(label='Сегодня', style=discord.ButtonStyle.secondary)
+        async def today_day(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.day_offset = 0
+            await self.update_message(interaction)
+
+        @discord.ui.button(label='', style=discord.ButtonStyle.primary, emoji='➡️')
+        async def next_day(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.day_offset += 1
+            await self.update_message(interaction)
+
+    @app_commands.command(name='sessions', description='Показывает Ваши сессии "общения"')
+    @app_commands.guild_only()
+    @app_commands.checks.cooldown(1, 15.0, key=lambda i: (i.guild_id, i.user.id))
+    async def sessions(self, interaction: discord.Interaction):
+        """### Команда для просмотра детальной статистики общения"""
+        view = self.VoiceDetailedSessionsView(self.bot, interaction.user)
+
+        target_date = date.today()
+        sessions, total_seconds = await view.get_daily_sessions(target_date)
+
+        plot_file = view.generate_daily_plot(
+            target_date, sessions, total_seconds)
+
+        readable_date = target_date.strftime('%d.%m.%Y')
+        total_hours = total_seconds / 3600
+
+        embed = create_embed(
+            title=f"Детализированные сессии — {interaction.user.display_name}",
+            description=f"**Дата:** {readable_date}\n**Всего за день:** {total_hours:.2f} ч. ({readable_time(total_seconds)})",
+            color=discord.Color.from_rgb(88, 101, 242)
+        )
+        embed.set_image(url="attachment://daily_plot.png")
+
+        file = discord.File(plot_file, filename="daily_plot.png")
+
+        await interaction.response.send_message(embed=embed, file=file, view=view, ephemeral=True)
 
 
 async def setup(bot):
