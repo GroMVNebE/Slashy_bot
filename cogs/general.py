@@ -966,17 +966,20 @@ class General(commands.Cog):
                     (guild_id.bit_length() + 7) // 8 or 1, byteorder='big')
                 uid_hash_code = hashlib.sha256(uid_bytes).hexdigest()
                 gid_hash_code = hashlib.sha256(gid_bytes).hexdigest()
+                # Получаем сессии общения пользователя за выбранный день
+                # Для этого конец сессии должен быть больше начала дня
+                # А начало сессии - меньше конца дня
                 rows = await con.fetch(
                     """
-                    SELECT start_time, end_time, seconds
+                    SELECT start_time, end_time
                     FROM voice_detailed_sessions
-                    WHERE guild_id = $1 AND user_id = $2 AND start_time >= $3 AND start_time <= $4
+                    WHERE guild_id = $1 AND user_id = $2 AND start_time < $3 AND end_time > $4
                     ORDER BY start_time ASC
                     """,
                     gid_hash_code,
                     uid_hash_code,
-                    start_of_day,
-                    end_of_day
+                    end_of_day,
+                    start_of_day
                 )
 
             sessions = []
@@ -987,9 +990,13 @@ class General(commands.Cog):
                 et_local = row['end_time'].astimezone()
 
                 sessions.append((st_local, et_local))
-                total_seconds += row['seconds']
+                if st_local < start_of_day:
+                    st_local = start_of_day
+                if et_local > end_of_day:
+                    et_local = end_of_day
+                total_seconds += (et_local - st_local).total_seconds()
 
-            return sessions, total_seconds
+            return sessions, int(total_seconds)
 
         def generate_daily_plot(self, target_date: date, sessions: list[tuple[datetime, datetime]], total_seconds: int) -> io.BytesIO:
             fig, ax = plt.subplots(figsize=(10, 3.5), dpi=120)
@@ -1003,7 +1010,7 @@ class General(commands.Cog):
             for spine in ax.spines.values():
                 spine.set_visible(False)
 
-            ax.tick_params(colors='#dbdee1', labelsize=9)
+            ax.tick_params(colors='#dbdee1', labelsize=12)
 
             x_min = datetime.combine(target_date, datetime.min.time())
             x_max = datetime.combine(target_date, datetime.max.time())
@@ -1020,41 +1027,39 @@ class General(commands.Cog):
 
             if not sessions:
                 ax.text(0.5, 0.5, 'Нет данных о сессиях за этот день',
-                        color='#abcdef', ha='center', va='center', fontsize=12, transform=ax.transAxes)
+                        color="#42bd41", ha='center', va='center', fontsize=24, transform=ax.transAxes)
             else:
                 xranges = []
                 for st, et in sessions:
                     st_naive = st.replace(tzinfo=None)
                     et_naive = et.replace(tzinfo=None)
+                    st_fixed = x_min if st_naive < x_min else st_naive
+                    et_fixed = x_max if et_naive > x_max else et_naive
 
-                    start_num = mdates.date2num(st_naive)
-                    duration_num = mdates.date2num(et_naive) - start_num
+                    start_num = mdates.date2num(st_fixed)
+                    duration_num = mdates.date2num(et_fixed) - start_num
                     xranges.append((start_num, duration_num))
 
-                ax.broken_barh(xranges, (0.75, 0.5), facecolors='#5865F2',
-                               edgecolor='#4752C4', linewidth=1, alpha=0.9)
-
-                for st, et in sessions:
-                    st_naive = st.replace(tzinfo=None)
-                    et_naive = et.replace(tzinfo=None)
-
-                    center_time = st_naive + (et_naive - st_naive) / 2
-
-                    time_label = f"{st.strftime('%H:%M')}-{et.strftime('%H:%M')}"
-
-                    if (et - st).total_seconds() > 1200:
+                    center_time = st_fixed + (et_fixed - st_fixed) / 2
+                    st_text = st_naive.strftime(
+                        '%H:%M') if st_naive == st_fixed else '-00:00'
+                    et_text = et_naive.strftime(
+                        '%H:%M') if et_naive == et_fixed else '00:00+'
+                    time_label = f"{st_text}\n{'–'*7}\n{et_text}"
+                    if (et_fixed - st_fixed).total_seconds() > 2400:
                         ax.text(
                             mdates.date2num(center_time),
-                            1.3,
+                            1,
                             time_label,
                             ha='center',
                             va='bottom',
                             color='#ffffff',
-                            fontsize=8,
+                            fontsize=10,
                             fontweight='bold',
-                            bbox=dict(facecolor='#2b2d31', alpha=0.7,
-                                      edgecolor='none', boxstyle='round,pad=0.2')
                         )
+
+                ax.broken_barh(xranges, (0.3, 1.4), facecolors='#5865F2',
+                               edgecolor="#1e1f22", linewidth=1, alpha=0.9)
 
             data_stream = io.BytesIO()
             plt.savefig(data_stream, format='png', bbox_inches='tight',
