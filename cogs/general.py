@@ -916,18 +916,30 @@ class General(commands.Cog):
         """### UI-представление для просмотра детальных сессий "общения" по дням
         Содержит кнопки для изменения отображаемого периода"""
 
-        def __init__(self, bot: 'Bot', user: discord.Member):
+        def __init__(self, bot: 'Bot', user: discord.Member, initial_interaction: discord.Interaction):
             """### UI-представление для просмотра детальных сессий "общения" по дням
             Содержит кнопки для изменения отображаемого периода
 
             Args:
                 bot (:class:`Bot`): Запущенный Дискорд-бот
                 user (:class:`discord.Member`): Участник Дискорд-сервера
+                initial_interaction (:class:`discord.Interaction`): Взаимодействие, создавшее данный интерфейс
             """
             super().__init__(timeout=180.0)
             self.bot = bot
             self.user = user
             self.day_offset = 0
+            self.initial_interaction = initial_interaction
+
+        async def on_timeout(self):
+            try:
+                logger.debug(
+                    'Время работы интерфейса просмотра детальных сессий "общения" истекло')
+                await self.initial_interaction.delete_original_response()
+            except Exception as e:
+                logger.error(
+                    f'Ошибка при удалении сообщения по тайм-ауту: {e}', exc_info=True
+                )
 
         async def update_message(self, interaction: discord.Interaction):
             target_date = date.today() + timedelta(days=self.day_offset)
@@ -1088,7 +1100,8 @@ class General(commands.Cog):
     @app_commands.checks.cooldown(1, 15.0, key=lambda i: (i.guild_id, i.user.id))
     async def sessions(self, interaction: discord.Interaction):
         """### Команда для просмотра детальной статистики общения"""
-        view = self.VoiceDetailedSessionsView(self.bot, interaction.user)
+        view = self.VoiceDetailedSessionsView(
+            self.bot, interaction.user, interaction)
 
         target_date = date.today()
         sessions, total_seconds = await view.get_daily_sessions(target_date)
