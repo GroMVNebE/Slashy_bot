@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
     user_id BIGINT,
     vc_stats_enabled BOOLEAN,
     vc_stats_privacy BOOLEAN,
+    vc_detailed_stats_enabled BOOLEAN,
     PRIMARY KEY (guild_id, user_id)
 );
 CREATE TABLE IF NOT EXISTS voice_max_sessions (
@@ -294,13 +295,14 @@ async def create_default_user_settings(pool: asyncpg.Pool, member: discord.Membe
                 'Создание записи со стандартными настройками пользователя')
             await con.execute(
                 """
-                INSERT INTO user_settings (guild_id, user_id, vc_stats_enabled, vc_stats_privacy)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO user_settings (guild_id, user_id, vc_stats_enabled, vc_stats_privacy, vc_detailed_stats_enabled)
+                VALUES ($1, $2, $3, $4, $5)
             """,
                 member.guild.id,
                 member.id,
                 default,
-                True
+                True,
+                False
             )
     except Exception as e:
         logger.error(
