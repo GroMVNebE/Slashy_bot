@@ -983,7 +983,7 @@ class General(commands.Cog):
                 # А начало сессии - меньше конца дня
                 rows = await con.fetch(
                     """
-                    SELECT start_time, end_time
+                    SELECT start_time AT TIME ZONE 'Europe/Moscow' AS start_time, end_time AT TIME ZONE 'Europe/Moscow' AS end_time
                     FROM voice_detailed_sessions
                     WHERE guild_id = $1 AND user_id = $2 AND start_time < $3 AND end_time > $4
                     ORDER BY start_time ASC
