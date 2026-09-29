@@ -136,8 +136,7 @@ class Events(commands.Cog):
                 "SELECT user_id, vc_stats_enabled FROM user_settings WHERE guild_id = $1",
                 channel.guild.id
             )
-            user_settings_dict = {r['user_id']
-                : r['vc_stats_enabled'] for r in settings}
+            user_settings_dict = {r['user_id']: r['vc_stats_enabled'] for r in settings}
             # Собираем список пользователей, у которых разрешён сбор статистики
             valid_members = []
             for m in channel.members:
@@ -233,7 +232,12 @@ class Events(commands.Cog):
                         f'{max_sessions_query}',
                         user_id, guild_id, ssn_start.date(), ssn_duration
                     )
-                    if ssn_duration > 60*5:
+                    # Получаем настройку пользователя, разрешающую сбор детальных сессий
+                    vc_ssn_perm = await conn.fetchrow("SELECT vc_detailed_stats_enabled FROM user_settings WHERE guild_id = $1 AND user_id = $2",
+                                                      guild_id, user_id)
+                    # Сохраняем детальную информацию о сессии "общения", если она продлилась больше 5 минут
+                    # И пользователь предоставил разрешение
+                    if ssn_duration > 60*5 and vc_ssn_perm is not None and vc_ssn_perm['vc_detailed_stats_enabled'] is True:
                         uid_bytes = user_id.to_bytes(
                             (user_id.bit_length() + 7) // 8 or 1, byteorder='big')
                         gid_bytes = guild_id.to_bytes(

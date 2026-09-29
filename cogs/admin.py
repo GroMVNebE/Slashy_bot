@@ -234,7 +234,12 @@ user_settings = [
      'name': 'Доступ к статистике времени "общения"',
      'type': 'boolean',
      'choices': [{'name': 'Всем', 'value': True},
-                 {'name': 'Никому', 'value': False}]}
+                 {'name': 'Никому', 'value': False}]},
+    {'code': 'vc_detailed_stats_enabled',
+     'name': 'Сбор детальных сессий "общения"',
+     'type': 'boolean',
+     'choices': [{'name': 'Включен', 'value': True},
+                 {'name': 'Отключен', 'value': False}]},
 ]
 """### Список с пользовательскими
 Содержит пользовательские настройки в виде словарей с полями:
