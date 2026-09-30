@@ -964,6 +964,8 @@ class General(commands.Cog):
             await interaction.response.edit_message(embed=embed, attachments=[file], view=self)
 
         async def get_daily_sessions(self, target_date: date):
+            logger.debug(
+                f'Поиск подходящих сессий для {get_info(self.user)}. Запрашиваемая дата: {target_date}')
             start_of_day = datetime.combine(
                 target_date, datetime.min.time(), tzinfo=ZoneInfo("Europe/Moscow"))
             end_of_day = datetime.combine(
@@ -1006,11 +1008,15 @@ class General(commands.Cog):
                     st_local = start_of_day
                 if et_local > end_of_day:
                     et_local = end_of_day
+                logger.debug(
+                    f'Найдена подходящая сессия: {st_local} - {et_local} ({int((et_local - st_local).total_seconds())} сек.)')
                 total_seconds += (et_local - st_local).total_seconds()
 
             return sessions, int(total_seconds)
 
         def generate_daily_plot(self, target_date: date, sessions: list[tuple[datetime, datetime]], total_seconds: int) -> io.BytesIO:
+            logger.debug(
+                f'Отрисовка графика сессий пользователя {get_info(self.user)} за {target_date}')
             fig, ax = plt.subplots(figsize=(10, 3.5), dpi=120)
 
             fig.patch.set_facecolor('#2b2d31')
@@ -1038,27 +1044,33 @@ class General(commands.Cog):
             ax.get_yaxis().set_visible(False)
 
             if not sessions:
+                logger.debug(f'Сессии за {target_date} не найдены')
                 ax.text(0.5, 0.5, 'Нет данных о сессиях за этот день',
                         color="#42bd41", ha='center', va='center', fontsize=24, transform=ax.transAxes)
             else:
+                logger.debug(
+                    f'Отрисовка {len(sessions)} {get_plural(len(sessions), ("сессии", "сессий", "сессий"))}')
                 xranges = []
                 for st, et in sessions:
                     st_naive = st.replace(tzinfo=None)
                     et_naive = et.replace(tzinfo=None)
                     st_fixed = x_min if st_naive < x_min else st_naive
                     et_fixed = x_max if et_naive > x_max else et_naive
+                    logger.debug(f'Обработка сессии: {st_fixed} - {et_fixed}')
 
                     start_num = mdates.date2num(st_fixed)
                     duration_num = mdates.date2num(et_fixed) - start_num
                     xranges.append((start_num, duration_num))
 
-                    center_time = st_fixed + (et_fixed - st_fixed) / 2
-                    st_text = st_naive.strftime(
-                        '%H:%M') if st_naive == st_fixed else '-00:00'
-                    et_text = et_naive.strftime(
-                        '%H:%M') if et_naive == et_fixed else '00:00+'
-                    time_label = f"{st_text}\n{'–'*7}\n{et_text}"
                     if (et_fixed - st_fixed).total_seconds() > 2400:
+                        center_time = st_fixed + (et_fixed - st_fixed) / 2
+                        st_text = et_fixed.strftime(
+                            '%H:%M') if st_naive == st_fixed else '-00:00'
+                        et_text = et_fixed.strftime(
+                            '%H:%M') if et_naive == et_fixed else '00:00+'
+                        time_label = f"{st_text}\n{'–'*7}\n{et_text}"
+                        logger.debug(
+                            f'Длина сессии достаточна для добавления штампа времени: {st_text} - {et_text}')
                         ax.text(
                             mdates.date2num(center_time),
                             1,
@@ -1100,6 +1112,8 @@ class General(commands.Cog):
     @app_commands.checks.cooldown(1, 15.0, key=lambda i: (i.guild_id, i.user.id))
     async def sessions(self, interaction: discord.Interaction):
         """### Команда для просмотра детальной статистики общения"""
+        logger.info(
+            f'Пользователь {get_info(interaction.user)} вызвал команду /sessions')
         view = self.VoiceDetailedSessionsView(
             self.bot, interaction.user, interaction)
 

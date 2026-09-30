@@ -96,6 +96,8 @@ class Events(commands.Cog):
                 'Пул соединений с базой данных не инициализирован. Пропуск обработки сообщения')
             return
         # Начисляем опыт за сообщение
+        logger.info(
+            f'Начисляется опыт за сообщение (длина: {len(message.content)}, кол-во слов: {len(message.content.split())})')
         await add_xp(user_id=message.author.id, guild_id=message.author.guild.id, xp=10, pool=self.bot.db_pool)
 
     async def get_valid_voice_members(self, channel: discord.VoiceChannel | discord.StageChannel, filtered: bool = False) -> list[discord.Member]:
@@ -136,7 +138,7 @@ class Events(commands.Cog):
                 "SELECT user_id, vc_stats_enabled FROM user_settings WHERE guild_id = $1",
                 channel.guild.id
             )
-            user_settings_dict = {r['user_id']: r['vc_stats_enabled'] for r in settings}
+            user_settings_dict = {r['user_id']                                  : r['vc_stats_enabled'] for r in settings}
             # Собираем список пользователей, у которых разрешён сбор статистики
             valid_members = []
             for m in channel.members:
@@ -212,6 +214,8 @@ class Events(commands.Cog):
                 # Если данные сохраняются после того, как пользователь покинул ГК
                 # Сохраняем все данные сессии - время общения, максимальную сессию и продолжительность последней сессии
                 else:
+                    logger.info(
+                        f'Сохранение информации о сессии (длительность: {ssn_duration} сек.)')
                     stats_query = """
                     INSERT INTO voice_stats (user_id, guild_id, day, seconds)
                     VALUES ($1, $2, CURRENT_DATE, $3)
