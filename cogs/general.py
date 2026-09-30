@@ -21,6 +21,8 @@ matplotlib.use('Agg')
 if TYPE_CHECKING:
     from launch import Bot
 
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+
 # Инициализируем логгер для этого модуля
 logger = logging.getLogger('slashy.general')
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
@@ -947,7 +949,7 @@ class General(commands.Cog):
             sessions, total_seconds = await self.get_daily_sessions(target_date)
 
             plot_file = self.generate_daily_plot(
-                target_date, sessions, total_seconds)
+                target_date, sessions)
 
             readable_date = target_date.strftime('%d.%m.%Y')
             total_hours = total_seconds / 3600
@@ -967,9 +969,9 @@ class General(commands.Cog):
             logger.debug(
                 f'Поиск подходящих сессий для {get_info(self.user)}. Запрашиваемая дата: {target_date}')
             start_of_day = datetime.combine(
-                target_date, datetime.min.time(), tzinfo=ZoneInfo("Europe/Moscow"))
+                target_date, datetime.min.time(), tzinfo=MOSCOW_TZ)
             end_of_day = datetime.combine(
-                target_date, datetime.max.time(), tzinfo=ZoneInfo("Europe/Moscow"))
+                target_date, datetime.max.time(), tzinfo=MOSCOW_TZ)
 
             async with self.bot.db_pool.acquire() as con:
                 user_id = self.user.id
@@ -985,7 +987,7 @@ class General(commands.Cog):
                 # А начало сессии - меньше конца дня
                 rows = await con.fetch(
                     """
-                    SELECT start_time AT TIME ZONE 'Europe/Moscow' AS start_time, end_time AT TIME ZONE 'Europe/Moscow' AS end_time
+                    SELECT start_time, end_time
                     FROM voice_detailed_sessions
                     WHERE guild_id = $1 AND user_id = $2 AND start_time < $3 AND end_time > $4
                     ORDER BY start_time ASC
@@ -1000,8 +1002,8 @@ class General(commands.Cog):
             total_seconds = 0
 
             for row in rows:
-                st_local = row['start_time'].astimezone()
-                et_local = row['end_time'].astimezone()
+                st_local = row['start_time'].astimezone(MOSCOW_TZ)
+                et_local = row['end_time'].astimezone(MOSCOW_TZ)
 
                 sessions.append((st_local, et_local))
                 if st_local < start_of_day:
@@ -1014,7 +1016,7 @@ class General(commands.Cog):
 
             return sessions, int(total_seconds)
 
-        def generate_daily_plot(self, target_date: date, sessions: list[tuple[datetime, datetime]], total_seconds: int) -> io.BytesIO:
+        def generate_daily_plot(self, target_date: date, sessions: list[tuple[datetime, datetime]]) -> io.BytesIO:
             logger.debug(
                 f'Отрисовка графика сессий пользователя {get_info(self.user)} за {target_date}')
             fig, ax = plt.subplots(figsize=(10, 3.5), dpi=120)
@@ -1121,7 +1123,7 @@ class General(commands.Cog):
         sessions, total_seconds = await view.get_daily_sessions(target_date)
 
         plot_file = view.generate_daily_plot(
-            target_date, sessions, total_seconds)
+            target_date, sessions)
 
         readable_date = target_date.strftime('%d.%m.%Y')
         total_hours = total_seconds / 3600
