@@ -1064,7 +1064,7 @@ class General(commands.Cog):
 
                     if (et_fixed - st_fixed).total_seconds() > 2400:
                         center_time = st_fixed + (et_fixed - st_fixed) / 2
-                        st_text = et_fixed.strftime(
+                        st_text = st_fixed.strftime(
                             '%H:%M') if st_naive == st_fixed else '-00:00'
                         et_text = et_fixed.strftime(
                             '%H:%M') if et_naive == et_fixed else '00:00+'
