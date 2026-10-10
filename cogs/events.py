@@ -138,7 +138,8 @@ class Events(commands.Cog):
                 "SELECT user_id, vc_stats_enabled FROM user_settings WHERE guild_id = $1",
                 channel.guild.id
             )
-            user_settings_dict = {r['user_id']                                  : r['vc_stats_enabled'] for r in settings}
+            user_settings_dict = {r['user_id']
+                : r['vc_stats_enabled'] for r in settings}
             # Собираем список пользователей, у которых разрешён сбор статистики
             valid_members = []
             for m in channel.members:
@@ -242,12 +243,11 @@ class Events(commands.Cog):
                     # Сохраняем детальную информацию о сессии "общения", если она продлилась больше 5 минут
                     # И пользователь предоставил разрешение
                     if ssn_duration > 60*5 and vc_ssn_perm is not None and vc_ssn_perm['vc_detailed_stats_enabled'] is True:
-                        uid_bytes = user_id.to_bytes(
-                            (user_id.bit_length() + 7) // 8 or 1, byteorder='big')
-                        gid_bytes = guild_id.to_bytes(
-                            (guild_id.bit_length() + 7) // 8 or 1, byteorder='big')
-                        uid_hash_code = hashlib.sha256(uid_bytes).hexdigest()
-                        gid_hash_code = hashlib.sha256(gid_bytes).hexdigest()
+                        uid_hash_code = hash_data([{'type': 'uid', 'data': str(user_id)},
+                                                   {'type': 'gid', 'data': str(guild_id)}],
+                                                  'voice')
+                        gid_hash_code = hash_data(
+                            [{'type': 'gid', 'data': str(guild_id)}], 'voice')
                         await conn.execute(
                             """
                             INSERT INTO voice_detailed_sessions(user_id, guild_id, start_time, end_time, seconds)
@@ -428,7 +428,8 @@ class Events(commands.Cog):
 
         logger.debug('Проверка истекающих сессий...')
         for user_id, data in list(self.pending_sessions.items()):
-            logger.debug(f'{user_id} - {int(now)}/{int(data["expires_at"])}')
+            logger.debug(
+                f'{user_id} - {abs(int(now)-int(data["expires_at"]))}/0')
             if now >= data['expires_at']:
                 await self.save_time(user_id, data, False)
                 self.pending_sessions.pop(user_id, None)

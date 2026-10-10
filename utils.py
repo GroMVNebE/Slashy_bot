@@ -5,6 +5,7 @@ import asyncpg
 import discord
 from dotenv import load_dotenv
 import hashlib
+import hmac
 
 # Инициализируем логгер для этого модуля
 logger = logging.getLogger('slashy.utils')
@@ -249,7 +250,7 @@ def create_embed(
     return embed
 
 
-def get_info(object: discord.Member | discord.Guild | discord.VoiceChannel | discord.StageChannel | None) -> str:
+def get_info(object: discord.Member | discord.Guild | discord.VoiceChannel | discord.StageChannel | discord.User | None) -> str:
     """### Функция для получения информации об объекте
     Возвращает хэш ID пользователя/сервера/канала  
     *Используется для упрощения отладки*
@@ -263,10 +264,7 @@ def get_info(object: discord.Member | discord.Guild | discord.VoiceChannel | dis
     logger.debug(f'Получение строки с информацией для объекта {type(object)}')
     if object is None:
         return 'Нет данных'
-    bytes = object.id.to_bytes(
-        (object.id.bit_length() + 7) // 8 or 1, byteorder='big')
-    hash_code = hashlib.sha256(bytes).hexdigest()
-    return f'{hash_code}'
+    return hash_data([{'type': 'id', 'data': str(object.id)}], 'log')
 
 
 async def create_default_user_settings(pool: asyncpg.Pool, member: discord.Member) -> None:
@@ -393,3 +391,44 @@ def readable_time(seconds: int) -> str | Literal['Время не указано
         parts.append(
             f"{seconds} {get_plural(seconds, ('секунда', 'секунды', 'секунд'))}")
     return ' '.join(parts)
+
+
+VOICE_PEPPER = get_env('VOICE_PEPPER', 'none')
+LOG_PEPPER = get_env('LOG_PEPPER', 'none')
+if VOICE_PEPPER == 'none' or LOG_PEPPER == 'none':
+    logger.critical(
+        f'В .env не найдено значение {"VOICE_PEPPER" if VOICE_PEPPER == "none" else "LOG_PEPPER"}, используемое для защиты пользовательских данных. Продолжение работы невозможно из-за нарушения безопасности')
+    raise ValueError(
+        f'Ошибка! В .env не найдено значение {"VOICE_PEPPER" if LOG_PEPPER == "none" else "LOG_PEPPER"}, необходимое для защиты пользовательских данных')
+
+
+def hash_data(data: list[dict], category: Literal['voice', 'log']) -> str:
+    """### Функция для хэширования данных
+    Хэширует данные с использованием различного перца в зависимости от категории
+
+    Args:
+        data (list[dict]): Хэшируемые данные
+        category Literal['voice', 'log']: Категория хэшируемых данных
+
+    Returns:
+        str: Результат хэширования
+    """
+    # Собираем строку с хэшируемыми данными
+    hash_str = ''
+    for rec in data:
+        hash_str += f"{rec['type']}:{rec['data']};"
+    # Переводим данные в бинарный вид
+    data_bytes = hash_str.encode()
+    # Находим подходящий перец и переводим его в бинарный вид
+    pepper_bytes = None
+    if category == 'log':
+        pepper_bytes = LOG_PEPPER.encode()
+    elif category == 'voice':
+        pepper_bytes = VOICE_PEPPER.encode()
+    if pepper_bytes is None:
+        raise ValueError('Не задано значение перца при хэшировании')
+    # Хэшируем данные с использованием перца
+    hash_result = hmac.new(pepper_bytes, data_bytes,
+                           hashlib.sha256).hexdigest()
+    # Возвращаем результат
+    return hash_result

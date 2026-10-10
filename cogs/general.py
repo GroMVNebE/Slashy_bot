@@ -976,12 +976,11 @@ class General(commands.Cog):
             async with self.bot.db_pool.acquire() as con:
                 user_id = self.user.id
                 guild_id = self.user.guild.id
-                uid_bytes = user_id.to_bytes(
-                    (user_id.bit_length() + 7) // 8 or 1, byteorder='big')
-                gid_bytes = guild_id.to_bytes(
-                    (guild_id.bit_length() + 7) // 8 or 1, byteorder='big')
-                uid_hash_code = hashlib.sha256(uid_bytes).hexdigest()
-                gid_hash_code = hashlib.sha256(gid_bytes).hexdigest()
+                uid_hash_code = hash_data([{'type': 'uid', 'data': str(user_id)},
+                                           {'type': 'gid', 'data': str(guild_id)}],
+                                          'voice')
+                gid_hash_code = hash_data(
+                    [{'type': 'gid', 'data': str(guild_id)}], 'voice')
                 # Получаем сессии общения пользователя за выбранный день
                 # Для этого конец сессии должен быть больше начала дня
                 # А начало сессии - меньше конца дня
