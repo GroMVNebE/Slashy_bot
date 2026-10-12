@@ -1,9 +1,9 @@
-import time
+import time as timelib
 import discord
 from discord.ext import commands, tasks
 import logging
 from utils import *
-from datetime import datetime
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 from typing import TYPE_CHECKING
 
@@ -138,8 +138,7 @@ class Events(commands.Cog):
                 "SELECT user_id, vc_stats_enabled FROM user_settings WHERE guild_id = $1",
                 channel.guild.id
             )
-            user_settings_dict = {r['user_id']
-                : r['vc_stats_enabled'] for r in settings}
+            user_settings_dict = {r['user_id']: r['vc_stats_enabled'] for r in settings}
             # Собираем список пользователей, у которых разрешён сбор статистики
             valid_members = []
             for m in channel.members:
@@ -170,7 +169,7 @@ class Events(commands.Cog):
         """
         logger.debug(f'Получение данных сессии пользователя {user_id}...')
         try:
-            end_time: float = session.get('left_at', time.time())
+            end_time: float = session.get('left_at', timelib.time())
             prd_duration = int(end_time - session['prd_start'])
             ssn_start: datetime = session['session_start']
             ssn_end = datetime.fromtimestamp(
@@ -288,7 +287,7 @@ class Events(commands.Cog):
         # В остальных случаях создаём активную сесисю для пользователя
         # Сохраняя нужные данные
         self.active_sessions[member.id] = {
-            'prd_start': time.time(),
+            'prd_start': timelib.time(),
             'session_start': datetime.now(ZoneInfo("Europe/Moscow")),
             'guild_id': member.guild.id
         }
@@ -308,8 +307,8 @@ class Events(commands.Cog):
         session: dict = self.active_sessions.pop(member.id, None)
         # Если у пользователя была сессия, переносим её в список истекающих
         if session:
-            session['expires_at'] = time.time() + grace_period
-            session['left_at'] = time.time()
+            session['expires_at'] = timelib.time() + grace_period
+            session['left_at'] = timelib.time()
             self.pending_sessions[member.id] = session
             logger.debug(
                 f'Сессия пользователя {get_info(member)} отправлена в pending_sessions на {grace_period} сек.')
@@ -405,7 +404,7 @@ class Events(commands.Cog):
         """### Задача автосохранения сессий общения
         Автоматически сохраняет данные о сессиях общения пользователей каждые 15 минут
         """
-        now = time.time()
+        now = timelib.time()
 
         logger.debug('Плановое автосохранение активных сессий...')
         for user_id, data in list(self.active_sessions.items()):
@@ -424,7 +423,7 @@ class Events(commands.Cog):
         """### Задача удаления истёкших сессий общения
         Автоматически удаляет истёкшие сессии общения и сохраняет их данные в БД
         """
-        now = time.time()
+        now = timelib.time()
 
         logger.debug('Проверка истекающих сессий...')
         for user_id, data in list(self.pending_sessions.items()):
@@ -439,6 +438,29 @@ class Events(commands.Cog):
     @delete_pending_sessions_task.before_loop
     async def before_delete_pending_sessions(self):
         """### Функция, срабатывающая перед запуском задачи удаления истёкших сессий
+        Ждёт готовности бота до запуска, чтобы избежать ошибок при попытке доступа к базе данных до её инициализации
+        """
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(time=time(hour=3, minute=0, tzinfo=ZoneInfo("Europe/Moscow")))
+    async def delete_old_sessions_task(self):
+        """### Задача удаления детальных сессий, хранящихся больше 30 дней
+        Автоматически удаляет детальные сессии общения, дата начала которых отличается от текущей
+        более чем на 30 дней
+        """
+        logger.debug('Удаление устаревших детальных сессий общения')
+        try:
+            async with self.bot.db_pool.acquire() as conn:
+                res = await conn.execute("DELETE FROM voice_detailed_sessions WHERE start_time < CURRENT_DATE - INTERVAL '30 day'")
+                amount = int(res.split()[1])
+                logger.info(
+                    f"{get_plural(amount, ('Была удалена', 'Были удалены', 'Были удалены'))} {amount} {get_plural(amount, ('запись', 'записи', 'записей'))}")
+        except Exception as e:
+            logger.error(f'Ошибка при удалении устаревших сессий общения: {e}')
+
+    @delete_old_sessions_task.before_loop
+    async def before_delete_old_sessions(self):
+        """### Функция, срабатывающая перед запуском задачи удаления старых сессий
         Ждёт готовности бота до запуска, чтобы избежать ошибок при попытке доступа к базе данных до её инициализации
         """
         await self.bot.wait_until_ready()
