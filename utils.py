@@ -408,7 +408,7 @@ def hash_data(data: list[dict], category: Literal['voice', 'log']) -> str:
 
     Args:
         data (list[dict]): Хэшируемые данные
-        category Literal['voice', 'log']: Категория хэшируемых данных
+        category (Literal['voice', 'log']): Категория хэшируемых данных
 
     Returns:
         str: Результат хэширования
@@ -432,3 +432,21 @@ def hash_data(data: list[dict], category: Literal['voice', 'log']) -> str:
                            hashlib.sha256).hexdigest()
     # Возвращаем результат
     return hash_result
+
+
+def get_voice_hashes(user_id: int, guild_id: int) -> tuple[str, str]:
+    """### Функция для получения хэшей UserID и GuildID
+    Возвращает хэши UserID и GuildID, необходимые для сохранения/получения
+    детальных сессий общения
+
+    Args:
+        user_id (int): UserID пользователя
+        guild_id (int): GuildID пользователя
+
+    Returns:
+        tuple[str, str]: (хэш пары пользователь+сервер, хэш сервера)
+    """
+    uid_hash = hash_data([{'type': 'uid', 'data': str(user_id)},
+                          {'type': 'gid', 'data': str(guild_id)}], 'voice')
+    gid_hash = hash_data([{'type': 'gid', 'data': str(guild_id)}], 'voice')
+    return uid_hash, gid_hash

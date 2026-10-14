@@ -242,17 +242,14 @@ class Events(commands.Cog):
                     # Сохраняем детальную информацию о сессии "общения", если она продлилась больше 5 минут
                     # И пользователь предоставил разрешение
                     if ssn_duration > 60*5 and vc_ssn_perm is not None and vc_ssn_perm['vc_detailed_stats_enabled'] is True:
-                        uid_hash_code = hash_data([{'type': 'uid', 'data': str(user_id)},
-                                                   {'type': 'gid', 'data': str(guild_id)}],
-                                                  'voice')
-                        gid_hash_code = hash_data(
-                            [{'type': 'gid', 'data': str(guild_id)}], 'voice')
+                        uid_hash, gid_hash = get_voice_hashes(
+                            user_id, guild_id)
                         await conn.execute(
                             """
                             INSERT INTO voice_detailed_sessions(user_id, guild_id, start_time, end_time, seconds)
                             VALUES ($1, $2, $3, $4, $5);
                         """,
-                            uid_hash_code, gid_hash_code, ssn_start, ssn_end, ssn_duration
+                            uid_hash, gid_hash, ssn_start, ssn_end, ssn_duration
                         )
                 logger.debug(
                     f'Сохранение данных {"периода" if autosave else "сессии"} "общения" пользователя {user_id} в БД: Успешно')

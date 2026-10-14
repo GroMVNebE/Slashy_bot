@@ -27,6 +27,264 @@ MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 logger = logging.getLogger('slashy.general')
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 
+PRIVACY_CATEGORIES: dict[str, dict] = {
+    'levels': {'label': 'Уровень и опыт',
+               'description': 'Опыт и уровень на всех серверах',
+               'tables': ['user_levels']},
+    'guess': {'label': 'Игра "Угадай число"',
+              'description': 'Незавершённые игры',
+              'tables': ['guess_number']},
+    'voice': {'label': 'Статистика общения',
+              'description': 'Время по дням, максимальные и детальные сессии',
+              'tables': ['voice_stats', 'voice_max_sessions']},
+    'detailed': {'label': 'Детальные сессии',
+                 'description': 'Время начала и окончания сессий',
+                 'tables': []},
+}
+"""Категории данных для /privacy"""
+
+
+def _affected(status: str) -> int:
+    """### Функция для подсчёта строк, затронутых SQL-запросом
+    Возвращает число затронутых строк из статуса asyncpg ('DELETE 3' -> 3)
+
+    Args:
+        status (str): Статус запроса asyncpg
+
+    Returns:
+        int: Количество затронутых строк"""
+    return int(status.split()[-1])
+
+
+async def delete_user_data(bot: "Bot", user_id: int, categories: set[str], guild_id: int = None) -> int:
+    """### Функция для удаления пользовательских данных из БД
+    Удаляет пользовательские данные на выбранном сервере или на всех серверах
+
+    Args:
+        bot (:class:`Bot`): Запущенный Discord-бот
+        user_id (int): UserID пользователя в Discord
+        guild_id (int): GuildID сервера в Discord
+        categories (set[str]): Категории удаляемых данных
+
+    Returns:
+        int: Количество удалённых строк
+    """
+    cats = set(categories)
+    # Детальные сессии ищутся через voice_stats, поэтому удаляем их вместе
+    if 'voice' in cats:
+        cats.add('detailed')
+        # Чистим активные сессии в памяти, иначе автосохранение вернёт данные
+        events = bot.get_cog('Events')
+        if events:
+            events.active_sessions.pop(user_id, None)
+            events.pending_sessions.pop(user_id, None)
+
+    total = 0
+    async with bot.db_pool.acquire() as con:
+        async with con.transaction():
+            if 'detailed' in cats:
+                if guild_id is None:
+                    rows = await con.fetch(
+                        "SELECT DISTINCT guild_id FROM voice_stats WHERE user_id = $1",
+                        user_id)
+                    uids = [get_voice_hashes(user_id, r['guild_id'])[
+                        0] for r in rows]
+                    if uids:
+                        status = await con.execute(
+                            "DELETE FROM voice_detailed_sessions WHERE user_id = ANY($1::text[])",
+                            uids)
+                        total += _affected(status)
+                else:
+                    uid, gid = get_voice_hashes(user_id, guild_id)
+                    status = await con.execute("DELETE FROM voice_detailed_sessions WHERE user_id = $1 AND guild_id = $2", uid, gid)
+                    total += _affected(status)
+            for key in cats:
+                for table in PRIVACY_CATEGORIES[key]['tables']:
+                    if guild_id is None:
+                        status = await con.execute(
+                            f"DELETE FROM {table} WHERE user_id = $1", user_id)
+                    else:
+                        status = await con.execute(
+                            f"DELETE FROM {table} WHERE user_id = $1 AND guild_id = $2", user_id, guild_id)
+                    total += _affected(status)
+    return total
+
+
+def _confirm_embed(categories: set[str], guild_id: int = None) -> discord.Embed:
+    """### Функция, генерирующая сообщение для подтверждения удаления данных
+
+    Args:
+        categories (set[str]): Категории удаляемых данных
+        guild_id (int): GuildID сервера в Discord
+
+    Returns:
+        discord.Embed: Сообщение для подтверждения удаления данных
+    """
+    names = [PRIVACY_CATEGORIES[k]['label']
+             for k in PRIVACY_CATEGORIES if k in categories]
+    if 'voice' in categories and 'detailed' not in categories:
+        names.append(PRIVACY_CATEGORIES['detailed']['label'])
+    descr = (f'Будут удалены данные {"**на всех серверах**" if guild_id is None else "на текущем сервере"}:\n• ' + '\n• '.join(names) +
+             '\n\nДействие **необратимо**.')
+    return create_embed(title='Подтвердите удаление', description=descr,
+                        color=discord.Color.orange())
+
+
+class PrivacyBaseView(discord.ui.View):
+    """### Базовое UI-представление для команды /privacy
+    Формирует основу для других UI-представлений"""
+
+    def __init__(self, bot: "Bot", interaction: discord.Interaction, timeout: float = 180.0):
+        """### Базовое UI-представление для команды /privacy
+        Формирует основу для других UI-представлений
+
+        Args:
+            bot (:class:`Bot`): Запущенный Discord-бот
+            interaction (:class:`discord.Interaction`): Взаимодействие, создавшее интерфейс
+            timeout (float, optional): Таймаут, после которого UI-представление будет удалено. По умолочанию 180 сек.
+        """
+        super().__init__(timeout=timeout)
+        self.bot = bot
+        self.initial_interaction = interaction
+        self.owner_id = interaction.user.id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.owner_id
+
+    async def on_timeout(self):
+        try:
+            await self.initial_interaction.delete_original_response()
+        except discord.NotFound:
+            pass
+        except Exception as e:
+            logger.error(
+                f'Ошибка при удалении панели /privacy по тайм-ауту: {e}', exc_info=True)
+
+
+class PrivacyConfirmView(PrivacyBaseView):
+    """### UI-представление для подтверждения удаления данных
+        Содержит кнопки для удаления данных и отмены удаления"""
+
+    def __init__(self, bot: "Bot", interaction: discord.Interaction, categories: set[str], guild_id: int = None):
+        """### UI-представление для подтверждения удаления данных
+        Содержит кнопки для удаления данных и отмены удаления
+
+        Args:
+            bot (:class:`Bot`): Запущенный Discord-бот
+            interaction (:class:`discord.Interaction`): Взаимодействие, создавшее интерфейс
+            categories (set[str]): Категории удаляемых данных
+            guild_id (int): GuildID текущего Discord-сервера
+        """
+        super().__init__(bot, interaction, timeout=60.0)
+        self.categories = categories
+        self.guild_id = guild_id
+
+    @discord.ui.button(label='Подтвердить удаление', style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        # Сразу убираем кнопки, чтобы нельзя было нажать повторно
+        await interaction.response.edit_message(
+            embed=create_embed(title='Удаление...', color=discord.Color.orange()), view=None)
+        try:
+            if not self.bot.db_pool:
+                raise RuntimeError('Пул соединений с БД не инициализирован')
+            count = await delete_user_data(self.bot, interaction.user.id, self.categories, self.guild_id)
+            logger.info(f'Пользователь {get_info(interaction.user)} удалил свои данные '
+                        f'({sorted(self.categories)}), удалено строк: {count}')
+            descr = (f'Удалено записей: **{count}**\n'
+                     'Файлы логов (хранятся до 30 дней, ID в них хэшированы) и резервные копии БД '
+                     'этим действием не затрагиваются')
+            embed = create_embed(title='Данные удалены', description=descr,
+                                 color=discord.Color.green())
+        except Exception as e:
+            logger.error(f'Ошибка при удалении данных пользователя {get_info(interaction.user)}: {e}',
+                         exc_info=True)
+            embed = create_embed(title='Ошибка!',
+                                 description='Не удалось удалить данные.'
+                                             'Попробуйте повторить попытку позднее',
+                                 color=discord.Color.red())
+        await interaction.edit_original_response(embed=embed, view=None)
+
+    @discord.ui.button(label='Отмена', style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        await interaction.response.edit_message(
+            embed=create_embed(title='Удаление отменено', color=discord.Color.blue()), view=None)
+
+
+class PrivacySelect(discord.ui.Select):
+    """### Выпадающий список для выбора категории удаляемых данных
+        Содержит меню выбора категории данных"""
+
+    def __init__(self, guild_id: int = None):
+        """### UI-представление для выбора категории удаляемых данных
+        Содержит меню выбора категории данных
+
+        Args:
+            guild_id (int): GuildID текущего Discord-сервера
+        """
+        options = [discord.SelectOption(label=v['label'], description=v['description'], value=k)
+                   for k, v in PRIVACY_CATEGORIES.items()]
+        super().__init__(placeholder='Выберите, что удалить...', min_values=1,
+                         max_values=len(options), options=options)
+        self.guild_id = guild_id
+
+    async def callback(self, interaction: discord.Interaction):
+        view: PrivacyBaseView = self.view
+        categories = set(self.values)
+        confirm = PrivacyConfirmView(
+            view.bot, view.initial_interaction, categories, self.guild_id)
+        view.stop()
+        await interaction.response.edit_message(embed=_confirm_embed(categories, self.guild_id), view=confirm)
+
+
+class PrivacySelectView(PrivacyBaseView):
+    """### UI-представление для выбора категории удаляемых данных
+        Содержит выпадающий список :class:`PrivacySelect` для выбора категории данных"""
+
+    def __init__(self, bot: "Bot", interaction: discord.Interaction, guild_id: int = None):
+        """### UI-представление для выбора категории удаляемых данных
+        Содержит выпадающий список :class:`PrivacySelect` для выбора категории данных
+
+        Args:
+            bot (:class:`Bot`): Запущенный Discord-бот
+            interaction (:class:`discord.Interaction`): Взаимодействие, создавшее интерфейс
+            guild_id (int): GuildID текущего Discord-сервера
+        """
+        super().__init__(bot, interaction)
+        self.add_item(PrivacySelect(guild_id))
+
+
+class PrivacyView(PrivacyBaseView):
+    """### UI-представление для удаления данных
+        Содержит кнопки для удаления выбранных категорий данных на текущем сервере, всех данных на текущем сервере и всех данных на всех серверах"""
+    @discord.ui.button(label='Удалить выбранное', style=discord.ButtonStyle.danger)
+    async def delete_selected(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = PrivacySelectView(
+            self.bot, self.initial_interaction, interaction.guild_id)
+        self.stop()
+        embed = create_embed(title='Что удалить?',
+                             description='Выберите одну или несколько категорий. '
+                                         'Удаление затронет только текущий сервер',
+                             color=discord.Color.blue())
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    @discord.ui.button(label='Удалить ВСЕ данные на ЭТОМ сервере', style=discord.ButtonStyle.danger)
+    async def delete_all_on_guild(self, interaction: discord.Interaction, button: discord.ui.Button):
+        categories = set(PRIVACY_CATEGORIES)
+        view = PrivacyConfirmView(
+            self.bot, self.initial_interaction, categories, interaction.guild_id)
+        self.stop()
+        await interaction.response.edit_message(embed=_confirm_embed(categories, interaction.guild_id), view=view)
+
+    @discord.ui.button(label='Удалить ВСЕ данные на ВСЕХ серверах', style=discord.ButtonStyle.danger)
+    async def delete_all(self, interaction: discord.Interaction, button: discord.ui.Button):
+        categories = set(PRIVACY_CATEGORIES)
+        view = PrivacyConfirmView(
+            self.bot, self.initial_interaction, categories)
+        self.stop()
+        await interaction.response.edit_message(embed=_confirm_embed(categories), view=view)
+
 
 class General(commands.Cog):
     """### Модуль с общими командами
@@ -976,11 +1234,7 @@ class General(commands.Cog):
             async with self.bot.db_pool.acquire() as con:
                 user_id = self.user.id
                 guild_id = self.user.guild.id
-                uid_hash_code = hash_data([{'type': 'uid', 'data': str(user_id)},
-                                           {'type': 'gid', 'data': str(guild_id)}],
-                                          'voice')
-                gid_hash_code = hash_data(
-                    [{'type': 'gid', 'data': str(guild_id)}], 'voice')
+                uid_hash, gid_hash = get_voice_hashes(user_id, guild_id)
                 # Получаем сессии общения пользователя за выбранный день
                 # Для этого конец сессии должен быть больше начала дня
                 # А начало сессии - меньше конца дня
@@ -991,8 +1245,8 @@ class General(commands.Cog):
                     WHERE guild_id = $1 AND user_id = $2 AND start_time < $3 AND end_time > $4
                     ORDER BY start_time ASC
                     """,
-                    gid_hash_code,
-                    uid_hash_code,
+                    gid_hash,
+                    uid_hash,
                     end_of_day,
                     start_of_day
                 )
@@ -1095,7 +1349,11 @@ class General(commands.Cog):
 
         @discord.ui.button(label='', style=discord.ButtonStyle.primary, emoji='⬅️')
         async def prev_day(self, interaction: discord.Interaction, button: discord.ui.Button):
-            self.day_offset -= 1
+            self.next_day.disabled = False
+            if self.day_offset > -30:
+                self.day_offset -= 1
+            if self.day_offset == -30:
+                self.prev_day.disabled = True
             await self.update_message(interaction)
 
         @discord.ui.button(label='Сегодня', style=discord.ButtonStyle.secondary)
@@ -1105,7 +1363,11 @@ class General(commands.Cog):
 
         @discord.ui.button(label='', style=discord.ButtonStyle.primary, emoji='➡️')
         async def next_day(self, interaction: discord.Interaction, button: discord.ui.Button):
-            self.day_offset += 1
+            self.prev_day.disabled = False
+            if self.day_offset < 0:
+                self.day_offset += 1
+            if self.day_offset == 0:
+                self.next_day.disabled = True
             await self.update_message(interaction)
 
     @app_commands.command(name='sessions', description='Показывает Ваши сессии "общения"')
@@ -1137,6 +1399,45 @@ class General(commands.Cog):
         file = discord.File(plot_file, filename="daily_plot.png")
 
         await interaction.response.send_message(embed=embed, file=file, view=view, ephemeral=True)
+
+    @app_commands.command(name='privacy', description='Содержит Политику конфиденциальности, а также позволяет удалить Ваши данные')
+    @app_commands.guild_only()
+    @app_commands.checks.cooldown(1, 60.0, key=lambda i: (i.guild_id, i.user.id))
+    async def privacy(self, interaction: discord.Interaction):
+        logger.info(
+            f'Пользователь {get_info(interaction.user)} вызвал команду /privacy')
+        embed = create_embed(
+            title='Политика конфиденциальности',
+            description='Slashy хранит Ваши данные, включая пользовательский ID и ID сервера Discord, чтобы обеспечить корректное функционирование'
+            ' модулей, таких как Уровень активности, Мини-игры, Сессии "общения". Ниже приведена более подробная информация о хранении Ваших данных,'
+            ' а также предоставлена возможность удаления части из них',
+            color=discord.Color.yellow(),
+            fields=[
+                {'name': 'Хранятся в открытом виде (без псевдоанонимизации)',
+                 'value': 'Уровень и опыт, игра "Угадай число" (только до завершения игры), настройки, '
+                          'время "общения" по дням и максимальная сессия за день',
+                 'inline': False},
+                {'name': 'Детальные сессии',
+                 'value': 'Только если Вы включили их в `/setup` и сессия длилась больше 5 минут. '
+                          'ID пользователя и сервера хранятся в хэшированном виде, время начала '
+                          'и окончания сессии - в открытом. '
+                          'Удаляются через 30 дн. после начала.',
+                 'inline': False},
+                {'name': 'Сроки',
+                 'value': 'Все данные, кроме детальных сессий "общения" хранятся бессрочно, пока Вы не удалите их вручную',
+                 'inline': False},
+                {'name': 'Логи',
+                 'value': 'Хранятся до 30 дней, используются для отладки и сбора анонимной статистики. Удалить их через бота нельзя',
+                 'inline': False},
+                {'name': 'Управление',
+                 'value': 'Отключить сбор и закрыть доступ к статистике можно, использовав `/setup`. '
+                          'Для удаления Ваших данных, хранимых Slashy, Вы можете воспользоваться кнопками ниже',
+                 'inline': False},
+            ],
+            timestamp=False,
+        )
+        await interaction.response.send_message(
+            embed=embed, view=PrivacyView(self.bot, interaction), ephemeral=True)
 
 
 async def setup(bot):
