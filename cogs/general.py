@@ -27,6 +27,264 @@ MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 logger = logging.getLogger('slashy.general')
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 
+PRIVACY_CATEGORIES: dict[str, dict] = {
+    'levels': {'label': 'Уровень и опыт',
+               'description': 'Опыт и уровень на всех серверах',
+               'tables': ['user_levels']},
+    'guess': {'label': 'Игра "Угадай число"',
+              'description': 'Незавершённые игры',
+              'tables': ['guess_number']},
+    'voice': {'label': 'Статистика общения',
+              'description': 'Время по дням, максимальные и детальные сессии',
+              'tables': ['voice_stats', 'voice_max_sessions']},
+    'detailed': {'label': 'Детальные сессии',
+                 'description': 'Время начала и окончания сессий',
+                 'tables': []},
+}
+"""Категории данных для /privacy"""
+
+
+def _affected(status: str) -> int:
+    """### Функция для подсчёта строк, затронутых SQL-запросом
+    Возвращает число затронутых строк из статуса asyncpg ('DELETE 3' -> 3)
+
+    Args:
+        status (str): Статус запроса asyncpg
+
+    Returns:
+        int: Количество затронутых строк"""
+    return int(status.split()[-1])
+
+
+async def delete_user_data(bot: "Bot", user_id: int, categories: set[str], guild_id: int = None) -> int:
+    """### Функция для удаления пользовательских данных из БД
+    Удаляет пользовательские данные на выбранном сервере или на всех серверах
+
+    Args:
+        bot (:class:`Bot`): Запущенный Discord-бот
+        user_id (int): UserID пользователя в Discord
+        guild_id (int): GuildID сервера в Discord
+        categories (set[str]): Категории удаляемых данных
+
+    Returns:
+        int: Количество удалённых строк
+    """
+    cats = set(categories)
+    # Детальные сессии ищутся через voice_stats, поэтому удаляем их вместе
+    if 'voice' in cats:
+        cats.add('detailed')
+        # Чистим активные сессии в памяти, иначе автосохранение вернёт данные
+        events = bot.get_cog('Events')
+        if events:
+            events.active_sessions.pop(user_id, None)
+            events.pending_sessions.pop(user_id, None)
+
+    total = 0
+    async with bot.db_pool.acquire() as con:
+        async with con.transaction():
+            if 'detailed' in cats:
+                if guild_id is None:
+                    rows = await con.fetch(
+                        "SELECT DISTINCT guild_id FROM voice_stats WHERE user_id = $1",
+                        user_id)
+                    uids = [get_voice_hashes(user_id, r['guild_id'])[
+                        0] for r in rows]
+                    if uids:
+                        status = await con.execute(
+                            "DELETE FROM voice_detailed_sessions WHERE user_id = ANY($1::text[])",
+                            uids)
+                        total += _affected(status)
+                else:
+                    uid, gid = get_voice_hashes(user_id, guild_id)
+                    status = await con.execute("DELETE FROM voice_detailed_sessions WHERE user_id = $1 AND guild_id = $2", uid, gid)
+                    total += _affected(status)
+            for key in cats:
+                for table in PRIVACY_CATEGORIES[key]['tables']:
+                    if guild_id is None:
+                        status = await con.execute(
+                            f"DELETE FROM {table} WHERE user_id = $1", user_id)
+                    else:
+                        status = await con.execute(
+                            f"DELETE FROM {table} WHERE user_id = $1 AND guild_id = $2", user_id, guild_id)
+                    total += _affected(status)
+    return total
+
+
+def _confirm_embed(categories: set[str], guild_id: int = None) -> discord.Embed:
+    """### Функция, генерирующая сообщение для подтверждения удаления данных
+
+    Args:
+        categories (set[str]): Категории удаляемых данных
+        guild_id (int): GuildID сервера в Discord
+
+    Returns:
+        discord.Embed: Сообщение для подтверждения удаления данных
+    """
+    names = [PRIVACY_CATEGORIES[k]['label']
+             for k in PRIVACY_CATEGORIES if k in categories]
+    if 'voice' in categories and 'detailed' not in categories:
+        names.append(PRIVACY_CATEGORIES['detailed']['label'])
+    descr = (f'Будут удалены данные {"**на всех серверах**" if guild_id is None else "на текущем сервере"}:\n• ' + '\n• '.join(names) +
+             '\n\nДействие **необратимо**.')
+    return create_embed(title='Подтвердите удаление', description=descr,
+                        color=discord.Color.orange())
+
+
+class PrivacyBaseView(discord.ui.View):
+    """### Базовое UI-представление для команды /privacy
+    Формирует основу для других UI-представлений"""
+
+    def __init__(self, bot: "Bot", interaction: discord.Interaction, timeout: float = 180.0):
+        """### Базовое UI-представление для команды /privacy
+        Формирует основу для других UI-представлений
+
+        Args:
+            bot (:class:`Bot`): Запущенный Discord-бот
+            interaction (:class:`discord.Interaction`): Взаимодействие, создавшее интерфейс
+            timeout (float, optional): Таймаут, после которого UI-представление будет удалено. По умолочанию 180 сек.
+        """
+        super().__init__(timeout=timeout)
+        self.bot = bot
+        self.initial_interaction = interaction
+        self.owner_id = interaction.user.id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.owner_id
+
+    async def on_timeout(self):
+        try:
+            await self.initial_interaction.delete_original_response()
+        except discord.NotFound:
+            pass
+        except Exception as e:
+            logger.error(
+                f'Ошибка при удалении панели /privacy по тайм-ауту: {e}', exc_info=True)
+
+
+class PrivacyConfirmView(PrivacyBaseView):
+    """### UI-представление для подтверждения удаления данных
+        Содержит кнопки для удаления данных и отмены удаления"""
+
+    def __init__(self, bot: "Bot", interaction: discord.Interaction, categories: set[str], guild_id: int = None):
+        """### UI-представление для подтверждения удаления данных
+        Содержит кнопки для удаления данных и отмены удаления
+
+        Args:
+            bot (:class:`Bot`): Запущенный Discord-бот
+            interaction (:class:`discord.Interaction`): Взаимодействие, создавшее интерфейс
+            categories (set[str]): Категории удаляемых данных
+            guild_id (int): GuildID текущего Discord-сервера
+        """
+        super().__init__(bot, interaction, timeout=60.0)
+        self.categories = categories
+        self.guild_id = guild_id
+
+    @discord.ui.button(label='Подтвердить удаление', style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        # Сразу убираем кнопки, чтобы нельзя было нажать повторно
+        await interaction.response.edit_message(
+            embed=create_embed(title='Удаление...', color=discord.Color.orange()), view=None)
+        try:
+            if not self.bot.db_pool:
+                raise RuntimeError('Пул соединений с БД не инициализирован')
+            count = await delete_user_data(self.bot, interaction.user.id, self.categories, self.guild_id)
+            logger.info(f'Пользователь {get_info(interaction.user)} удалил свои данные '
+                        f'({sorted(self.categories)}), удалено строк: {count}')
+            descr = (f'Удалено записей: **{count}**\n'
+                     'Файлы логов (хранятся до 30 дней, ID в них хэшированы) и резервные копии БД '
+                     'этим действием не затрагиваются')
+            embed = create_embed(title='Данные удалены', description=descr,
+                                 color=discord.Color.green())
+        except Exception as e:
+            logger.error(f'Ошибка при удалении данных пользователя {get_info(interaction.user)}: {e}',
+                         exc_info=True)
+            embed = create_embed(title='Ошибка!',
+                                 description='Не удалось удалить данные.'
+                                             'Попробуйте повторить попытку позднее',
+                                 color=discord.Color.red())
+        await interaction.edit_original_response(embed=embed, view=None)
+
+    @discord.ui.button(label='Отмена', style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        await interaction.response.edit_message(
+            embed=create_embed(title='Удаление отменено', color=discord.Color.blue()), view=None)
+
+
+class PrivacySelect(discord.ui.Select):
+    """### Выпадающий список для выбора категории удаляемых данных
+        Содержит меню выбора категории данных"""
+
+    def __init__(self, guild_id: int = None):
+        """### UI-представление для выбора категории удаляемых данных
+        Содержит меню выбора категории данных
+
+        Args:
+            guild_id (int): GuildID текущего Discord-сервера
+        """
+        options = [discord.SelectOption(label=v['label'], description=v['description'], value=k)
+                   for k, v in PRIVACY_CATEGORIES.items()]
+        super().__init__(placeholder='Выберите, что удалить...', min_values=1,
+                         max_values=len(options), options=options)
+        self.guild_id = guild_id
+
+    async def callback(self, interaction: discord.Interaction):
+        view: PrivacyBaseView = self.view
+        categories = set(self.values)
+        confirm = PrivacyConfirmView(
+            view.bot, view.initial_interaction, categories, self.guild_id)
+        view.stop()
+        await interaction.response.edit_message(embed=_confirm_embed(categories, self.guild_id), view=confirm)
+
+
+class PrivacySelectView(PrivacyBaseView):
+    """### UI-представление для выбора категории удаляемых данных
+        Содержит выпадающий список :class:`PrivacySelect` для выбора категории данных"""
+
+    def __init__(self, bot: "Bot", interaction: discord.Interaction, guild_id: int = None):
+        """### UI-представление для выбора категории удаляемых данных
+        Содержит выпадающий список :class:`PrivacySelect` для выбора категории данных
+
+        Args:
+            bot (:class:`Bot`): Запущенный Discord-бот
+            interaction (:class:`discord.Interaction`): Взаимодействие, создавшее интерфейс
+            guild_id (int): GuildID текущего Discord-сервера
+        """
+        super().__init__(bot, interaction)
+        self.add_item(PrivacySelect(guild_id))
+
+
+class PrivacyView(PrivacyBaseView):
+    """### UI-представление для удаления данных
+        Содержит кнопки для удаления выбранных категорий данных на текущем сервере, всех данных на текущем сервере и всех данных на всех серверах"""
+    @discord.ui.button(label='Удалить выбранное', style=discord.ButtonStyle.danger)
+    async def delete_selected(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = PrivacySelectView(
+            self.bot, self.initial_interaction, interaction.guild_id)
+        self.stop()
+        embed = create_embed(title='Что удалить?',
+                             description='Выберите одну или несколько категорий. '
+                                         'Удаление затронет только текущий сервер',
+                             color=discord.Color.blue())
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    @discord.ui.button(label='Удалить ВСЕ данные на ЭТОМ сервере', style=discord.ButtonStyle.danger)
+    async def delete_all_on_guild(self, interaction: discord.Interaction, button: discord.ui.Button):
+        categories = set(PRIVACY_CATEGORIES)
+        view = PrivacyConfirmView(
+            self.bot, self.initial_interaction, categories, interaction.guild_id)
+        self.stop()
+        await interaction.response.edit_message(embed=_confirm_embed(categories, interaction.guild_id), view=view)
+
+    @discord.ui.button(label='Удалить ВСЕ данные на ВСЕХ серверах', style=discord.ButtonStyle.danger)
+    async def delete_all(self, interaction: discord.Interaction, button: discord.ui.Button):
+        categories = set(PRIVACY_CATEGORIES)
+        view = PrivacyConfirmView(
+            self.bot, self.initial_interaction, categories)
+        self.stop()
+        await interaction.response.edit_message(embed=_confirm_embed(categories), view=view)
+
 
 class General(commands.Cog):
     """### Модуль с общими командами
@@ -56,7 +314,7 @@ class General(commands.Cog):
             interaction (discord.Interaction): Объект взаимодействия, содержащий подробные данные об отправленной команде
         """
         logger.info(
-            f'Пользователь {interaction.user.id} ({interaction.user.display_name}) запросил карточку со своим уровнем')
+            f'Пользователь {get_info(interaction.user)} вызвал команду /lvl')
         # Проверяем, что пул соединений с базой данных инициализирован
         if not self.bot.db_pool:
             logger.error(
@@ -77,7 +335,7 @@ class General(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         # Получаем данные об уровне и опыте пользователя из базы данных
         logger.debug(
-            f'Получение данных об уровне пользователя {user.id} ({user.display_name}) на сервере {interaction.guild_id} ({interaction.guild.name if interaction.guild else None}) из БД')
+            f'Получение данных об уровне пользователя {get_info(user)} на сервере {get_info(interaction.guild)} из БД')
         try:
             async with self.bot.db_pool.acquire() as connection:
                 row = await connection.fetchrow(
@@ -101,10 +359,10 @@ class General(commands.Cog):
                 else:
                     xp, lvl = row['xp'], row['level']
             logger.debug(
-                f'Получение данных об уровне пользователя {user.id} ({user.display_name}) на сервере {interaction.guild_id} ({interaction.guild.name if interaction.guild else None}) из БД: Успешно')
+                f'Получение данных об уровне пользователя {get_info(user)} на сервере {get_info(interaction.guild)} из БД: Успешно')
         except Exception as e:
             logger.error(
-                f'Ошибка при получении данных об уровне пользователя {user.id} ({user.display_name}) на сервере {interaction.guild_id} ({interaction.guild.name if interaction.guild else None}) из БД: {e}', exc_info=True
+                f'Ошибка при получении данных об уровне пользователя {get_info(user)} на сервере {get_info(interaction.guild)} из БД: {e}', exc_info=True
             )
             embed = create_embed(
                 title='Ошибка!',
@@ -118,7 +376,7 @@ class General(commands.Cog):
         lvl_up_progress = xp / required_xp if required_xp > 0 else 0
         lvl_up_progress = min(lvl_up_progress, 1)  # Ограничиваем от 0 до 1
         logger.debug(
-            f'Создание карточки уровня для пользователя {user.id} ({user.display_name}) на сервере {interaction.guild_id} ({interaction.guild.name if interaction.guild else None})')
+            f'Создание карточки уровня для пользователя {get_info(user)} на сервере {get_info(interaction.guild)}')
         try:
             # Загружаем шаблон карточки уровня
             bg = Image.open('assets/lvl_templ.png')
@@ -127,7 +385,7 @@ class General(commands.Cog):
             ava = None
             ava_buff = None
             logger.debug(
-                f'Загрузка аватара пользователя {user.id} ({user.display_name}) для карточки уровня')
+                f'Загрузка аватара пользователя {get_info(user)} для карточки уровня')
             async with aiohttp.ClientSession() as session:
                 async with session.get(url) as response:
                     if response.status == 200:
@@ -136,7 +394,7 @@ class General(commands.Cog):
                         ava = Image.open(ava_buff).convert('RGBA')
             if ava is None or ava_buff is None:
                 logger.error(
-                    f'Не удалось загрузить аватар пользователя {user.id} ({user.display_name})', exc_info=True
+                    f'Не удалось загрузить аватар пользователя {get_info(user)}', exc_info=True
                 )
                 embed = create_embed(
                     title='Ошибка!',
@@ -146,7 +404,7 @@ class General(commands.Cog):
                 await interaction.followup.send(embed=embed)
                 return
             logger.debug(
-                f'Вставляем данные пользователя {user.id} ({user.display_name}) на шаблон карточки')
+                f'Вставляем данные пользователя {get_info(user)} на шаблон карточки')
             ava = ava.resize(size=[65, 65])
             bg.paste(ava, (90, 138))
             # Получаем имя пользователя и обрезаем его, если оно слишком длинное для отображения на карточке
@@ -182,7 +440,7 @@ class General(commands.Cog):
                 anchor='mm',
             )
             logger.debug(
-                f'Сохраняем карточку уровня в буфер для отправки пользователю {user.id} ({user.display_name})')
+                f'Сохраняем карточку уровня в буфер для отправки пользователю {get_info(user)}')
             # Сохраняем получившуюся карточку
             buff = io.BytesIO()
             bg.save(buff, format='PNG')
@@ -199,10 +457,10 @@ class General(commands.Cog):
             buff.close()
             ava_buff.close()
             logger.info(
-                f'Пользователь {interaction.user.id} ({interaction.user.display_name}) получил карточку со своим уровнем (уровень {lvl}, опыт {xp}/{required_xp})')
+                f'Пользователь {get_info(interaction.user)} получил карточку со своим уровнем (уровень {lvl}, опыт {xp}/{required_xp})')
         except Exception as e:
             logger.error(
-                f'Ошибка при генерации карточки уровня для пользователя {user.id} ({user.display_name}): {e}', exc_info=True)
+                f'Ошибка при генерации карточки уровня для пользователя {get_info(user)}: {e}', exc_info=True)
             embed = create_embed(
                 title='Ошибка!',
                 description=f'В процессе создания карточки с Вашим уровнем произошла ошибка. Пожалуйста, попробуйте позже',
@@ -233,11 +491,11 @@ class General(commands.Cog):
 
         async def on_submit(self, interaction: discord.Interaction):
             logger.info(
-                f'Пользователь {interaction.user.id} отправил число {self.guess_input.value} в игре "Угадай число"')
+                f'Пользователь {get_info(interaction.user)} отправил число {self.guess_input.value} в игре "Угадай число"')
             # Проверяем, что пользователь ввёл число
             if not self.guess_input.value.isdigit():
                 logger.warning(
-                    f'{interaction.user.id} ввёл некорректное значение в игре guess: {self.guess_input.value}')
+                    f'{get_info(interaction.user)} ввёл некорректное значение в игре guess: {self.guess_input.value}')
                 embed = create_embed(
                     title='Некорректный ввод!',
                     description='Пожалуйста, введите целое число от 1 до 1000',
@@ -250,7 +508,7 @@ class General(commands.Cog):
             # Проверяем, что число в допустимых пределах
             if guess < 1 or guess > 1000:
                 logger.warning(
-                    f'{interaction.user.id} ввёл число вне допустимого диапазона в игре guess: {guess}')
+                    f'{get_info(interaction.user)} ввёл число вне допустимого диапазона в игре guess: {guess}')
                 embed = create_embed(
                     title='Некорректный ввод!',
                     description='Пожалуйста, введите целое число от 1 до 1000',
@@ -264,7 +522,7 @@ class General(commands.Cog):
             # Смотрим, угадал ли пользователь число
             # Если нет - выводим подсказку
             logger.debug(
-                f'Обновляем данные об игре для пользователя {user_id} в БД после попытки угадать число')
+                f'Обновляем данные об игре для пользователя {get_info(user_id)} в БД после попытки угадать число')
             try:
                 async with pool.acquire() as connection:
                     # Увеличиваем счетчик попыток в БД
@@ -291,12 +549,12 @@ class General(commands.Cog):
                     target = row['number']
                     tries = row['tries']
                     logger.debug(
-                        f'Обновлённые данные игры "Угадай число" для пользователя {user_id} из БД: \
+                        f'Обновлённые данные игры "Угадай число" для пользователя {get_info(user_id)} из БД: \
 загаданное число {target}, кол-во попыток {tries}')
                     # Проверяем победу
                     if guess == target:
                         logger.debug(
-                            f'Пользователь {user_id} угадал загаданное число, удаляем данные о игре из БД и обрабатываем победу')
+                            f'Пользователь {get_info(user_id)} угадал загаданное число, удаляем данные о игре из БД и обрабатываем победу')
                         # Удаляем данные об игре из БД, так как она закончилась
                         await pool.execute(
                             """
@@ -321,7 +579,7 @@ class General(commands.Cog):
                             xp = max((base + 9) // 10 * 10, 30)
                             await add_xp(user_id=user_id, guild_id=guild_id, xp=xp, pool=pool)
                             logger.info(
-                                f'Пользователь {user_id} угадал число {target} за {tries} попыток и получил {xp} XP')
+                                f'Пользователь {get_info(user_id)} угадал число {target} за {tries} попыток и получил {xp} XP')
                         self.view.stop()  # Останавливаем работу View
                         await interaction.response.edit_message(embed=embed, view=None)
                         return
@@ -341,7 +599,7 @@ class General(commands.Cog):
                     )
                     await interaction.response.edit_message(embed=embed, view=self.view)
                     logger.debug(
-                        f'Пользователь {interaction.user.display_name} сделал попытку угадать число {target}: \
+                        f'Пользователь {get_info(interaction.user)} сделал попытку угадать число {target}: \
 {current_direction} чем {guess}. Попыток: {tries}')
             except Exception as e:
                 logger.error(
@@ -396,7 +654,7 @@ class General(commands.Cog):
         if not type(interaction.user) is discord.Member:
             return
         logger.info(
-            f'Пользователь {get_info(interaction.user)} использовал команду /guess')
+            f'Пользователь {get_info(interaction.user)} вызвал команду /guess')
         pool = self.bot.db_pool
         if not pool:
             logger.warning(
@@ -441,7 +699,7 @@ class General(commands.Cog):
                     tries = 0
                     # Логгируем данные для отладки и анализа
                     logger.debug(
-                        f'Для пользователя {interaction.user.display_name} была создана игра "Угадай число" с загаданным числом {target_number}')
+                        f'Для пользователя {get_info(interaction.user)} была создана игра "Угадай число" с загаданным числом {target_number}')
                 # Если игра уже есть - получаем нужные данные для продолжения
                 # И создаём соответствующее сообщение
                 else:
@@ -451,7 +709,7 @@ class General(commands.Cog):
                     tries = row["tries"]
                     # Логгируем данные для отладки и анализа
                     logger.debug(
-                        f'Пользователь {interaction.user.display_name} продолжает игру "Угадай число". \
+                        f'Пользователь {get_info(interaction.user)} продолжает игру "Угадай число". \
 Загаданное число {row["number"]}, попыток {tries}')
                 # Отправляем пользователю сообщение о начале игры с кнопкой для ввода числа
                 embed = create_embed(
@@ -491,12 +749,12 @@ class General(commands.Cog):
         if not type(interaction.user) is discord.Member:
             return
         logger.info(
-            f'Пользователь {get_info(interaction.user)} запросил генерацию случайного числа \
+            f'Пользователь {get_info(interaction.user)} вызвал команду /rand для генерации случайного числа \
 в диапазоне [{мин}; {макс}]')
         # Проверяем, если начало и конец диапазона совпадают
         if мин == макс:
             logger.warning(
-                f'{interaction.user.display_name} ввёл одинаковые числа для диапазона в команде rand [{мин}; {макс}]')
+                f'{get_info(interaction.user)} ввёл одинаковые числа для диапазона в команде rand [{мин}; {макс}]')
             embed = create_embed(
                 title='Некорректный ввод!',
                 description='Начало и конец диапазона не могут совпадать. Пожалуйста, введите разные числа.',
@@ -519,7 +777,7 @@ class General(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
         # Логгируем данные для отладки и анализа
         logger.info(
-            f'Для {interaction.user.display_name} было сгенерировано число {result} в диапазоне [{start}; {end}]')
+            f'Для {get_info(interaction.user)} было сгенерировано число {result} в диапазоне [{start}; {end}]')
 
     class VoiceStatsView(discord.ui.View):
         def __init__(self, bot: "Bot", user: discord.User | discord.Member, initial_interaction: discord.Interaction):
@@ -901,7 +1159,7 @@ class General(commands.Cog):
 
         except Exception as e:
             logger.error(
-                f'Ошибка в команде /voice для пользователя {target_member.id}: {e}', exc_info=True)
+                f'Ошибка в команде /voice для пользователя {get_info(target_member)}: {e}', exc_info=True)
             embed = create_embed(
                 title='Произошла ошибка',
                 description='Не удалось получить статистику времени общения. Попробуйте позже',
@@ -976,12 +1234,7 @@ class General(commands.Cog):
             async with self.bot.db_pool.acquire() as con:
                 user_id = self.user.id
                 guild_id = self.user.guild.id
-                uid_bytes = user_id.to_bytes(
-                    (user_id.bit_length() + 7) // 8 or 1, byteorder='big')
-                gid_bytes = guild_id.to_bytes(
-                    (guild_id.bit_length() + 7) // 8 or 1, byteorder='big')
-                uid_hash_code = hashlib.sha256(uid_bytes).hexdigest()
-                gid_hash_code = hashlib.sha256(gid_bytes).hexdigest()
+                uid_hash, gid_hash = get_voice_hashes(user_id, guild_id)
                 # Получаем сессии общения пользователя за выбранный день
                 # Для этого конец сессии должен быть больше начала дня
                 # А начало сессии - меньше конца дня
@@ -992,8 +1245,8 @@ class General(commands.Cog):
                     WHERE guild_id = $1 AND user_id = $2 AND start_time < $3 AND end_time > $4
                     ORDER BY start_time ASC
                     """,
-                    gid_hash_code,
-                    uid_hash_code,
+                    gid_hash,
+                    uid_hash,
                     end_of_day,
                     start_of_day
                 )
@@ -1096,7 +1349,11 @@ class General(commands.Cog):
 
         @discord.ui.button(label='', style=discord.ButtonStyle.primary, emoji='⬅️')
         async def prev_day(self, interaction: discord.Interaction, button: discord.ui.Button):
-            self.day_offset -= 1
+            self.next_day.disabled = False
+            if self.day_offset > -30:
+                self.day_offset -= 1
+            if self.day_offset == -30:
+                self.prev_day.disabled = True
             await self.update_message(interaction)
 
         @discord.ui.button(label='Сегодня', style=discord.ButtonStyle.secondary)
@@ -1106,7 +1363,11 @@ class General(commands.Cog):
 
         @discord.ui.button(label='', style=discord.ButtonStyle.primary, emoji='➡️')
         async def next_day(self, interaction: discord.Interaction, button: discord.ui.Button):
-            self.day_offset += 1
+            self.prev_day.disabled = False
+            if self.day_offset < 0:
+                self.day_offset += 1
+            if self.day_offset == 0:
+                self.next_day.disabled = True
             await self.update_message(interaction)
 
     @app_commands.command(name='sessions', description='Показывает Ваши сессии "общения"')
@@ -1129,7 +1390,7 @@ class General(commands.Cog):
         total_hours = total_seconds / 3600
 
         embed = create_embed(
-            title=f"Детализированные сессии — {interaction.user.display_name}",
+            title=f"Детализированные сессии — {get_info(interaction.user)}",
             description=f"**Дата:** {readable_date}\n**Всего за день:** {total_hours:.2f} ч. ({readable_time(total_seconds)})",
             color=discord.Color.from_rgb(88, 101, 242)
         )
@@ -1138,6 +1399,45 @@ class General(commands.Cog):
         file = discord.File(plot_file, filename="daily_plot.png")
 
         await interaction.response.send_message(embed=embed, file=file, view=view, ephemeral=True)
+
+    @app_commands.command(name='privacy', description='Содержит Политику конфиденциальности, а также позволяет удалить Ваши данные')
+    @app_commands.guild_only()
+    @app_commands.checks.cooldown(1, 60.0, key=lambda i: (i.guild_id, i.user.id))
+    async def privacy(self, interaction: discord.Interaction):
+        logger.info(
+            f'Пользователь {get_info(interaction.user)} вызвал команду /privacy')
+        embed = create_embed(
+            title='Политика конфиденциальности',
+            description='Slashy хранит Ваши данные, включая пользовательский ID и ID сервера Discord, чтобы обеспечить корректное функционирование'
+            ' модулей, таких как Уровень активности, Мини-игры, Сессии "общения". Ниже приведена более подробная информация о хранении Ваших данных,'
+            ' а также предоставлена возможность удаления части из них',
+            color=discord.Color.yellow(),
+            fields=[
+                {'name': 'Хранятся в открытом виде (без псевдоанонимизации)',
+                 'value': 'Уровень и опыт, игра "Угадай число" (только до завершения игры), настройки, '
+                          'время "общения" по дням и максимальная сессия за день',
+                 'inline': False},
+                {'name': 'Детальные сессии',
+                 'value': 'Только если Вы включили их в `/setup` и сессия длилась больше 5 минут. '
+                          'ID пользователя и сервера хранятся в хэшированном виде, время начала '
+                          'и окончания сессии - в открытом. '
+                          'Удаляются через 30 дн. после начала.',
+                 'inline': False},
+                {'name': 'Сроки',
+                 'value': 'Все данные, кроме детальных сессий "общения" хранятся бессрочно, пока Вы не удалите их вручную',
+                 'inline': False},
+                {'name': 'Логи',
+                 'value': 'Хранятся до 30 дней, используются для отладки и сбора анонимной статистики. Удалить их через бота нельзя',
+                 'inline': False},
+                {'name': 'Управление',
+                 'value': 'Отключить сбор и закрыть доступ к статистике можно, использовав `/setup`. '
+                          'Для удаления Ваших данных, хранимых Slashy, Вы можете воспользоваться кнопками ниже',
+                 'inline': False},
+            ],
+            timestamp=False,
+        )
+        await interaction.response.send_message(
+            embed=embed, view=PrivacyView(self.bot, interaction), ephemeral=True)
 
 
 async def setup(bot):

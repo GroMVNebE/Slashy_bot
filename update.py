@@ -10,8 +10,7 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 
 
 UPDATE_SCHEMA = """
-ALTER TABLE user_settings
-    ADD COLUMN vc_detailed_stats_enabled BOOLEAN DEFAULT FALSE;
+CREATE INDEX IF NOT EXISTS start_time_index ON voice_detailed_sessions (start_time);
 """
 
 
