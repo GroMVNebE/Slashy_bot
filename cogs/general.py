@@ -1390,7 +1390,7 @@ class General(commands.Cog):
         total_hours = total_seconds / 3600
 
         embed = create_embed(
-            title=f"Детализированные сессии — {get_info(interaction.user)}",
+            title=f"Детализированные сессии — {interaction.user.display_name}",
             description=f"**Дата:** {readable_date}\n**Всего за день:** {total_hours:.2f} ч. ({readable_time(total_seconds)})",
             color=discord.Color.from_rgb(88, 101, 242)
         )
