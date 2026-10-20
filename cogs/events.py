@@ -113,7 +113,7 @@ class Events(commands.Cog):
         """
         logger.debug(
             f'Начато выполнение get_valid_voice_members - получение валидных пользователей (не являющихся ботами) '
-            f'для голосового канала {channel.id} ({channel.name}) на сервере {get_info(channel.guild)}')
+            f'для голосового канала {get_info(channel)} на сервере {get_info(channel.guild)}')
         # Если нужны все валидные пользователи - отсекаем ботов
         if not filtered:
             logger.debug(
@@ -131,14 +131,14 @@ class Events(commands.Cog):
             # Если сбор статистики не указан или запрещён - возвращаем пустой список
             if not guild_row or guild_row['vc_stats_enabled'] is False:
                 logger.debug(
-                    f'На сервере {channel.guild.id} отключен или не настроен сбор статистики')
+                    f'На сервере {get_info(channel.guild)} отключен или не настроен сбор статистики')
                 return []
             # Получаем значения настроек пользователей
             settings = await conn.fetch(
                 "SELECT user_id, vc_stats_enabled FROM user_settings WHERE guild_id = $1",
                 channel.guild.id
             )
-            user_settings_dict = {r['user_id']: r['vc_stats_enabled'] for r in settings}
+            user_settings_dict = {r['user_id']                                  : r['vc_stats_enabled'] for r in settings}
             # Собираем список пользователей, у которых разрешён сбор статистики
             valid_members = []
             for m in channel.members:
@@ -167,7 +167,8 @@ class Events(commands.Cog):
             session (dict): Сессия "общения" из :data:`active_sessions` | :data:`pending_sessions`
             duration (int): Продолжительность сессии в секундах
         """
-        logger.debug(f'Получение данных сессии пользователя {user_id}...')
+        logger.debug(
+            f'Получение данных сессии пользователя {get_info(user_id)}...')
         try:
             end_time: float = session.get('left_at', timelib.time())
             prd_duration = int(end_time - session['prd_start'])
@@ -176,15 +177,15 @@ class Events(commands.Cog):
                 end_time, ZoneInfo("Europe/Moscow"))
             ssn_duration = int((ssn_end - ssn_start).total_seconds())
             guild_id: int = session['guild_id']
-            logger.debug(
-                f'Получены данные сессии {user_id}: {session["prd_start"]} - {end_time} ({prd_duration}), {ssn_start} - {ssn_end} ({ssn_duration}), ID: {guild_id}')
+            logger.debug(  # Подумать над удалением - эта строка содержит много персональной информации, хоть и важна для отладки
+                f'Получены данные сессии {get_info(user_id)}: {session["prd_start"]} - {end_time} ({prd_duration}), {ssn_start} - {ssn_end} ({ssn_duration}), ID: {get_info(guild_id)}')
         except Exception as e:
             logger.error(
-                f'Ошибка при получении данных сессии "общения" пользователя {user_id}: {e}', exc_info=True)
+                f'Ошибка при получении данных сессии "общения" пользователя {get_info(user_id)}: {e}', exc_info=True)
             return
         logger.debug(
-            f'Начато выполнение save_time - сохранение {"периода" if autosave else "сессии"} "общения" для пользователя {user_id} '
-            f'на сервере {guild_id} с продолжительностью {prd_duration} ({ssn_duration}) сек.')
+            f'Начато выполнение save_time - сохранение {"периода" if autosave else "сессии"} "общения" для пользователя {get_info(user_id)} '
+            f'на сервере {get_info(guild_id)} с продолжительностью {prd_duration} ({ssn_duration}) сек.')
         if prd_duration < 0:
             logger.error(
                 f'Некорректное время общения: {prd_duration} < 0')
@@ -192,13 +193,13 @@ class Events(commands.Cog):
         # Проверяем, что сессия длилась хотя бы 15 секунд
         if ssn_duration < 15:
             logger.warning(
-                f'Сессия пользователя {user_id} меньше 15 секунд, пропуск сохранения')
+                f'Сессия пользователя {get_info(user_id)} меньше 15 секунд, пропуск сохранения')
             return
         # Сохраняем время в базе данных, используя UPSERT для обновления существующей записи или создания новой
         try:
             # Сохраняем данные в БД
             logger.debug(
-                f'Сохранение данных сессии "общения" пользователя {user_id} в БД')
+                f'Сохранение данных сессии "общения" пользователя {get_info(user_id)} в БД')
             async with self.bot.db_pool.acquire() as conn:
                 # Если происходит автосохранение - обновляем время общения пользователя за текущий день
                 if autosave:
@@ -252,10 +253,10 @@ class Events(commands.Cog):
                             uid_hash, gid_hash, ssn_start, ssn_end, ssn_duration
                         )
                 logger.debug(
-                    f'Сохранение данных {"периода" if autosave else "сессии"} "общения" пользователя {user_id} в БД: Успешно')
+                    f'Сохранение данных {"периода" if autosave else "сессии"} "общения" пользователя {get_info(user_id)} в БД: Успешно')
         except Exception as e:
             logger.warning(
-                f'Ошибка при сохранении данных сессии "общения" пользователя {user_id} в БД: {e}', exc_info=True)
+                f'Ошибка при сохранении данных сессии "общения" пользователя {get_info(user_id)} в БД: {e}', exc_info=True)
 
     async def start_tracking(self, member: discord.Member):
         """### Функция для начала отслеживания времени общения
@@ -275,7 +276,7 @@ class Events(commands.Cog):
         # Переносим в active_sessions
         if member.id in self.pending_sessions:
             logger.debug(
-                f'Пользователь {member.id} ({member.display_name}) вернулся из pending_sessions. Восстанавливаем сессию.')
+                f'Пользователь {get_info(member)} вернулся из pending_sessions. Восстанавливаем сессию')
             session = self.pending_sessions.pop(member.id)
             session.pop('expires_at', None)
             session.pop('left_at', None)
@@ -425,12 +426,12 @@ class Events(commands.Cog):
         logger.debug('Проверка истекающих сессий...')
         for user_id, data in list(self.pending_sessions.items()):
             logger.debug(
-                f'{user_id} - {abs(int(now)-int(data["expires_at"]))}/0')
+                f'{get_info(user_id)} - {abs(int(now)-int(data["expires_at"]))} сек. до сохранения')
             if now >= data['expires_at']:
                 await self.save_time(user_id, data, False)
                 self.pending_sessions.pop(user_id, None)
                 logger.debug(
-                    f'Льготный период истек. Сессия {user_id} окончательно сохранена в БД')
+                    f'Льготный период истек. Сессия {get_info(user_id)} окончательно сохранена в БД')
 
     @delete_pending_sessions_task.before_loop
     async def before_delete_pending_sessions(self):

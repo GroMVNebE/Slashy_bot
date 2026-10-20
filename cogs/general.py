@@ -314,7 +314,7 @@ class General(commands.Cog):
             interaction (discord.Interaction): Объект взаимодействия, содержащий подробные данные об отправленной команде
         """
         logger.info(
-            f'Пользователь {interaction.user.id} ({interaction.user.display_name}) запросил карточку со своим уровнем')
+            f'Пользователь {get_info(interaction.user)} вызвал команду /lvl')
         # Проверяем, что пул соединений с базой данных инициализирован
         if not self.bot.db_pool:
             logger.error(
@@ -335,7 +335,7 @@ class General(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         # Получаем данные об уровне и опыте пользователя из базы данных
         logger.debug(
-            f'Получение данных об уровне пользователя {user.id} ({user.display_name}) на сервере {interaction.guild_id} ({interaction.guild.name if interaction.guild else None}) из БД')
+            f'Получение данных об уровне пользователя {get_info(user)} на сервере {get_info(interaction.guild)} из БД')
         try:
             async with self.bot.db_pool.acquire() as connection:
                 row = await connection.fetchrow(
@@ -359,10 +359,10 @@ class General(commands.Cog):
                 else:
                     xp, lvl = row['xp'], row['level']
             logger.debug(
-                f'Получение данных об уровне пользователя {user.id} ({user.display_name}) на сервере {interaction.guild_id} ({interaction.guild.name if interaction.guild else None}) из БД: Успешно')
+                f'Получение данных об уровне пользователя {get_info(user)} на сервере {get_info(interaction.guild)} из БД: Успешно')
         except Exception as e:
             logger.error(
-                f'Ошибка при получении данных об уровне пользователя {user.id} ({user.display_name}) на сервере {interaction.guild_id} ({interaction.guild.name if interaction.guild else None}) из БД: {e}', exc_info=True
+                f'Ошибка при получении данных об уровне пользователя {get_info(user)} на сервере {get_info(interaction.guild)} из БД: {e}', exc_info=True
             )
             embed = create_embed(
                 title='Ошибка!',
@@ -376,7 +376,7 @@ class General(commands.Cog):
         lvl_up_progress = xp / required_xp if required_xp > 0 else 0
         lvl_up_progress = min(lvl_up_progress, 1)  # Ограничиваем от 0 до 1
         logger.debug(
-            f'Создание карточки уровня для пользователя {user.id} ({user.display_name}) на сервере {interaction.guild_id} ({interaction.guild.name if interaction.guild else None})')
+            f'Создание карточки уровня для пользователя {get_info(user)} на сервере {get_info(interaction.guild)}')
         try:
             # Загружаем шаблон карточки уровня
             bg = Image.open('assets/lvl_templ.png')
@@ -385,7 +385,7 @@ class General(commands.Cog):
             ava = None
             ava_buff = None
             logger.debug(
-                f'Загрузка аватара пользователя {user.id} ({user.display_name}) для карточки уровня')
+                f'Загрузка аватара пользователя {get_info(user)} для карточки уровня')
             async with aiohttp.ClientSession() as session:
                 async with session.get(url) as response:
                     if response.status == 200:
@@ -394,7 +394,7 @@ class General(commands.Cog):
                         ava = Image.open(ava_buff).convert('RGBA')
             if ava is None or ava_buff is None:
                 logger.error(
-                    f'Не удалось загрузить аватар пользователя {user.id} ({user.display_name})', exc_info=True
+                    f'Не удалось загрузить аватар пользователя {get_info(user)}', exc_info=True
                 )
                 embed = create_embed(
                     title='Ошибка!',
@@ -404,7 +404,7 @@ class General(commands.Cog):
                 await interaction.followup.send(embed=embed)
                 return
             logger.debug(
-                f'Вставляем данные пользователя {user.id} ({user.display_name}) на шаблон карточки')
+                f'Вставляем данные пользователя {get_info(user)} на шаблон карточки')
             ava = ava.resize(size=[65, 65])
             bg.paste(ava, (90, 138))
             # Получаем имя пользователя и обрезаем его, если оно слишком длинное для отображения на карточке
@@ -440,7 +440,7 @@ class General(commands.Cog):
                 anchor='mm',
             )
             logger.debug(
-                f'Сохраняем карточку уровня в буфер для отправки пользователю {user.id} ({user.display_name})')
+                f'Сохраняем карточку уровня в буфер для отправки пользователю {get_info(user)}')
             # Сохраняем получившуюся карточку
             buff = io.BytesIO()
             bg.save(buff, format='PNG')
@@ -457,10 +457,10 @@ class General(commands.Cog):
             buff.close()
             ava_buff.close()
             logger.info(
-                f'Пользователь {interaction.user.id} ({interaction.user.display_name}) получил карточку со своим уровнем (уровень {lvl}, опыт {xp}/{required_xp})')
+                f'Пользователь {get_info(interaction.user)} получил карточку со своим уровнем (уровень {lvl}, опыт {xp}/{required_xp})')
         except Exception as e:
             logger.error(
-                f'Ошибка при генерации карточки уровня для пользователя {user.id} ({user.display_name}): {e}', exc_info=True)
+                f'Ошибка при генерации карточки уровня для пользователя {get_info(user)}: {e}', exc_info=True)
             embed = create_embed(
                 title='Ошибка!',
                 description=f'В процессе создания карточки с Вашим уровнем произошла ошибка. Пожалуйста, попробуйте позже',
@@ -491,11 +491,11 @@ class General(commands.Cog):
 
         async def on_submit(self, interaction: discord.Interaction):
             logger.info(
-                f'Пользователь {interaction.user.id} отправил число {self.guess_input.value} в игре "Угадай число"')
+                f'Пользователь {get_info(interaction.user)} отправил число {self.guess_input.value} в игре "Угадай число"')
             # Проверяем, что пользователь ввёл число
             if not self.guess_input.value.isdigit():
                 logger.warning(
-                    f'{interaction.user.id} ввёл некорректное значение в игре guess: {self.guess_input.value}')
+                    f'{get_info(interaction.user)} ввёл некорректное значение в игре guess: {self.guess_input.value}')
                 embed = create_embed(
                     title='Некорректный ввод!',
                     description='Пожалуйста, введите целое число от 1 до 1000',
@@ -508,7 +508,7 @@ class General(commands.Cog):
             # Проверяем, что число в допустимых пределах
             if guess < 1 or guess > 1000:
                 logger.warning(
-                    f'{interaction.user.id} ввёл число вне допустимого диапазона в игре guess: {guess}')
+                    f'{get_info(interaction.user)} ввёл число вне допустимого диапазона в игре guess: {guess}')
                 embed = create_embed(
                     title='Некорректный ввод!',
                     description='Пожалуйста, введите целое число от 1 до 1000',
@@ -522,7 +522,7 @@ class General(commands.Cog):
             # Смотрим, угадал ли пользователь число
             # Если нет - выводим подсказку
             logger.debug(
-                f'Обновляем данные об игре для пользователя {user_id} в БД после попытки угадать число')
+                f'Обновляем данные об игре для пользователя {get_info(user_id)} в БД после попытки угадать число')
             try:
                 async with pool.acquire() as connection:
                     # Увеличиваем счетчик попыток в БД
@@ -549,12 +549,12 @@ class General(commands.Cog):
                     target = row['number']
                     tries = row['tries']
                     logger.debug(
-                        f'Обновлённые данные игры "Угадай число" для пользователя {user_id} из БД: \
+                        f'Обновлённые данные игры "Угадай число" для пользователя {get_info(user_id)} из БД: \
 загаданное число {target}, кол-во попыток {tries}')
                     # Проверяем победу
                     if guess == target:
                         logger.debug(
-                            f'Пользователь {user_id} угадал загаданное число, удаляем данные о игре из БД и обрабатываем победу')
+                            f'Пользователь {get_info(user_id)} угадал загаданное число, удаляем данные о игре из БД и обрабатываем победу')
                         # Удаляем данные об игре из БД, так как она закончилась
                         await pool.execute(
                             """
@@ -579,7 +579,7 @@ class General(commands.Cog):
                             xp = max((base + 9) // 10 * 10, 30)
                             await add_xp(user_id=user_id, guild_id=guild_id, xp=xp, pool=pool)
                             logger.info(
-                                f'Пользователь {user_id} угадал число {target} за {tries} попыток и получил {xp} XP')
+                                f'Пользователь {get_info(user_id)} угадал число {target} за {tries} попыток и получил {xp} XP')
                         self.view.stop()  # Останавливаем работу View
                         await interaction.response.edit_message(embed=embed, view=None)
                         return
@@ -599,7 +599,7 @@ class General(commands.Cog):
                     )
                     await interaction.response.edit_message(embed=embed, view=self.view)
                     logger.debug(
-                        f'Пользователь {interaction.user.display_name} сделал попытку угадать число {target}: \
+                        f'Пользователь {get_info(interaction.user)} сделал попытку угадать число {target}: \
 {current_direction} чем {guess}. Попыток: {tries}')
             except Exception as e:
                 logger.error(
@@ -654,7 +654,7 @@ class General(commands.Cog):
         if not type(interaction.user) is discord.Member:
             return
         logger.info(
-            f'Пользователь {get_info(interaction.user)} использовал команду /guess')
+            f'Пользователь {get_info(interaction.user)} вызвал команду /guess')
         pool = self.bot.db_pool
         if not pool:
             logger.warning(
@@ -699,7 +699,7 @@ class General(commands.Cog):
                     tries = 0
                     # Логгируем данные для отладки и анализа
                     logger.debug(
-                        f'Для пользователя {interaction.user.display_name} была создана игра "Угадай число" с загаданным числом {target_number}')
+                        f'Для пользователя {get_info(interaction.user)} была создана игра "Угадай число" с загаданным числом {target_number}')
                 # Если игра уже есть - получаем нужные данные для продолжения
                 # И создаём соответствующее сообщение
                 else:
@@ -709,7 +709,7 @@ class General(commands.Cog):
                     tries = row["tries"]
                     # Логгируем данные для отладки и анализа
                     logger.debug(
-                        f'Пользователь {interaction.user.display_name} продолжает игру "Угадай число". \
+                        f'Пользователь {get_info(interaction.user)} продолжает игру "Угадай число". \
 Загаданное число {row["number"]}, попыток {tries}')
                 # Отправляем пользователю сообщение о начале игры с кнопкой для ввода числа
                 embed = create_embed(
@@ -749,12 +749,12 @@ class General(commands.Cog):
         if not type(interaction.user) is discord.Member:
             return
         logger.info(
-            f'Пользователь {get_info(interaction.user)} запросил генерацию случайного числа \
+            f'Пользователь {get_info(interaction.user)} вызвал команду /rand для генерации случайного числа \
 в диапазоне [{мин}; {макс}]')
         # Проверяем, если начало и конец диапазона совпадают
         if мин == макс:
             logger.warning(
-                f'{interaction.user.display_name} ввёл одинаковые числа для диапазона в команде rand [{мин}; {макс}]')
+                f'{get_info(interaction.user)} ввёл одинаковые числа для диапазона в команде rand [{мин}; {макс}]')
             embed = create_embed(
                 title='Некорректный ввод!',
                 description='Начало и конец диапазона не могут совпадать. Пожалуйста, введите разные числа.',
@@ -777,7 +777,7 @@ class General(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
         # Логгируем данные для отладки и анализа
         logger.info(
-            f'Для {interaction.user.display_name} было сгенерировано число {result} в диапазоне [{start}; {end}]')
+            f'Для {get_info(interaction.user)} было сгенерировано число {result} в диапазоне [{start}; {end}]')
 
     class VoiceStatsView(discord.ui.View):
         def __init__(self, bot: "Bot", user: discord.User | discord.Member, initial_interaction: discord.Interaction):
@@ -1159,7 +1159,7 @@ class General(commands.Cog):
 
         except Exception as e:
             logger.error(
-                f'Ошибка в команде /voice для пользователя {target_member.id}: {e}', exc_info=True)
+                f'Ошибка в команде /voice для пользователя {get_info(target_member)}: {e}', exc_info=True)
             embed = create_embed(
                 title='Произошла ошибка',
                 description='Не удалось получить статистику времени общения. Попробуйте позже',
@@ -1390,7 +1390,7 @@ class General(commands.Cog):
         total_hours = total_seconds / 3600
 
         embed = create_embed(
-            title=f"Детализированные сессии — {interaction.user.display_name}",
+            title=f"Детализированные сессии — {get_info(interaction.user)}",
             description=f"**Дата:** {readable_date}\n**Всего за день:** {total_hours:.2f} ч. ({readable_time(total_seconds)})",
             color=discord.Color.from_rgb(88, 101, 242)
         )

@@ -122,7 +122,7 @@ async def add_xp(user_id: int, guild_id: int, xp: int, pool: asyncpg.Pool) -> No
         ValueError: Если было передано не положительное количество опыта
     """
     logger.debug(
-        f'Начисление {xp} опыта пользователю {user_id} на сервере {guild_id}')
+        f'Начисление {xp} опыта пользователю {get_info(user_id)} на сервере {get_info(guild_id)}')
     if xp <= 0:
         raise ValueError(
             f'Переданное значение добавляемого опыта ({xp}) должно быть положительным!')
@@ -130,7 +130,7 @@ async def add_xp(user_id: int, guild_id: int, xp: int, pool: asyncpg.Pool) -> No
         async with pool.acquire() as connection:
             # Начисляем опыт и получаем обновлённые данные о пользователе
             logger.debug(
-                f'Обновление данные об уровне пользователя {user_id} в БД')
+                f'Обновление данные об уровне пользователя {get_info(user_id)} в БД')
             row = await connection.fetchrow(
                 """
                 INSERT INTO user_levels (guild_id, user_id, xp)
@@ -145,7 +145,7 @@ async def add_xp(user_id: int, guild_id: int, xp: int, pool: asyncpg.Pool) -> No
             )
             # Получаем данные о текущем опыте и уровне пользователя
             logger.debug(
-                f'Получение обновлённых данные об уровне пользователя {user_id}')
+                f'Получение обновлённых данные об уровне пользователя {get_info(user_id)}')
             curr_xp = row['xp']
             curr_level = row['level']
             # Вычисляем требуемый опыт для следующего уровня
@@ -153,7 +153,8 @@ async def add_xp(user_id: int, guild_id: int, xp: int, pool: asyncpg.Pool) -> No
                 int(100 * curr_level + 50 * curr_level**1.688) + 9) // 10 * 10
             # Поднимаем уровень пользователя, если опыта достаточно
             if curr_xp >= required_xp:
-                logger.debug(f'Увеличение уровня пользователя {user_id}')
+                logger.debug(
+                    f'Увеличение уровня пользователя {get_info(user_id)}')
             level_up = False
             while curr_xp >= required_xp:
                 curr_xp -= required_xp
@@ -164,7 +165,7 @@ async def add_xp(user_id: int, guild_id: int, xp: int, pool: asyncpg.Pool) -> No
             # Обновляем уровень и оставшийся опыт в базе данных, если уровень был повышен
             if level_up:
                 logger.debug(
-                    f'Обновление данных об уровне пользователя {user_id}')
+                    f'Обновление данных об уровне пользователя {get_info(user_id)}')
                 await connection.execute(
                     """
                     UPDATE user_levels
@@ -177,7 +178,7 @@ async def add_xp(user_id: int, guild_id: int, xp: int, pool: asyncpg.Pool) -> No
                     user_id,
                 )
         logger.debug(
-            f'{get_plural(xp, ("Начислена", "Начислено", "Начислено"))} {xp} ед. опыта пользователю {user_id} на сервере {guild_id}, '
+            f'{get_plural(xp, ("Начислена", "Начислено", "Начислено"))} {xp} ед. опыта пользователю {get_info(user_id)} на сервере {get_info(guild_id)}, '
             f'текущий уровень: {curr_level}, текущий опыт: {curr_xp}'
         )
     except Exception as e:
@@ -250,13 +251,13 @@ def create_embed(
     return embed
 
 
-def get_info(object: discord.Member | discord.Guild | discord.VoiceChannel | discord.StageChannel | discord.User | None) -> str:
+def get_info(object: discord.Member | discord.Guild | discord.VoiceChannel | discord.StageChannel | discord.User | int | None) -> str:
     """### Функция для получения информации об объекте
     Возвращает хэш ID пользователя/сервера/канала  
     *Используется для упрощения отладки*
 
     Args:
-        object (discord.Member | discord.Guild | discord.VoiceChannel | discord.StageChannel | None): Объект, для которого нужно получить строку с информацией
+        object (discord.Member | discord.Guild | discord.VoiceChannel | discord.StageChannel | int | None): Объект, для которого нужно получить строку с информацией
 
     Returns:
         str: Строка с информацией о переданном объекте
@@ -264,7 +265,10 @@ def get_info(object: discord.Member | discord.Guild | discord.VoiceChannel | dis
     logger.debug(f'Получение строки с информацией для объекта {type(object)}')
     if object is None:
         return 'Нет данных'
-    return hash_data([{'type': 'id', 'data': str(object.id)}], 'log')
+    if type(object) != int:
+        return hash_data([{'type': 'id', 'data': str(object.id)}], 'log')
+    else:
+        return hash_data([{'type': 'id', 'data': str(object)}], 'log')
 
 
 async def create_default_user_settings(pool: asyncpg.Pool, member: discord.Member) -> None:
@@ -276,10 +280,11 @@ async def create_default_user_settings(pool: asyncpg.Pool, member: discord.Membe
         member (:class:`discord.Member`): Пользователь, для которого требуется создать запись со стандартными настройками
     """
     logger.debug(
-        f'Создание настроек по умолчанию для пользователя {member.id}')
+        f'Создание настроек по умолчанию для пользователя {get_info(member)}')
     try:
         async with pool.acquire() as con:
-            logger.debug(f'Получение настроек для сервера {member.guild.id}')
+            logger.debug(
+                f'Получение настроек для сервера {get_info(member.guild)}')
             guild_setting = await con.fetchrow(
                 """
                 SELECT vc_stats_enabled
@@ -304,7 +309,7 @@ async def create_default_user_settings(pool: asyncpg.Pool, member: discord.Membe
             )
     except Exception as e:
         logger.error(
-            f'Ошибка при создании записи со стандартными настройками пользователя {member.id}: {e}', exc_info=True)
+            f'Ошибка при создании записи со стандартными настройками пользователя {get_info(member)}: {e}', exc_info=True)
         raise e
 
 
@@ -317,7 +322,7 @@ async def create_default_guild_settings(pool: asyncpg.Pool, guild: discord.Guild
         guild (:class:`discord.Guild`): Сервер, для которого требуется создать запись с настройками
     """
     logger.debug(
-        f'Создание записи со стандартными настройками сервера для сервера {guild.id}')
+        f'Создание записи со стандартными настройками сервера для сервера {get_info(guild)}')
     try:
         async with pool.acquire() as con:
             await con.execute(
@@ -331,7 +336,7 @@ async def create_default_guild_settings(pool: asyncpg.Pool, guild: discord.Guild
             )
     except Exception as e:
         logger.error(
-            f'Ошибка при создании записи со стандартными настройками сервера {guild.id}')
+            f'Ошибка при создании записи со стандартными настройками сервера {get_info(guild)}')
         raise e
 
 

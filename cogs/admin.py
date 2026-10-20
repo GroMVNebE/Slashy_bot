@@ -631,7 +631,7 @@ class SetupView(discord.ui.View):
                             only_owner_access = row['only_owner_access']
                 except Exception as e:
                     logger.error(
-                        f'Ошибка при проверке настройки only_owner_access для гильдии {guild.id}: {e}', exc_info=True)
+                        f'Ошибка при проверке настройки only_owner_access для сервера {get_info(guild.id)}: {e}', exc_info=True)
 
             if not only_owner_access:
                 allow_server_settings = True
@@ -664,11 +664,11 @@ class Admin(commands.Cog):
     @app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.guild_id, i.user.id))
     async def manage(self, interaction: discord.Interaction):
         logger.info(
-            f'Пользователь {interaction.user.id} ({interaction.user.display_name}) попытался вызвать панель управления ботом')
+            f'Пользователь {get_info(interaction.user)} попытался вызвать панель управления ботом')
         # Проверяем, является ли пользователь разработчиком
         if interaction.user.id != CREATOR_ID:
             logger.warning(
-                f'Пользователь {interaction.user.display_name} попытался получить доступ к панели управления ботом, но у него нет на это прав')
+                f'Пользователь {get_info(interaction.user)} попытался получить доступ к панели управления ботом, но у него нет на это прав')
             embed = create_embed(
                 title='У Вас нет доступа к этой команде',
                 description='Данная команда доступна только разработчику, оставьте ему эту работу ◑﹏◐',
