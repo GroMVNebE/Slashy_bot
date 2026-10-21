@@ -372,7 +372,8 @@ class General(commands.Cog):
             await interaction.followup.send(embed=embed)
             return
         # Вычисляем прогресс до следующего уровня
-        required_xp = 80 * lvl + 20 * lvl**2
+        required_xp = (
+                int(100 * lvl + 50 * lvl**1.688) + 9) // 10 * 10
         lvl_up_progress = xp / required_xp if required_xp > 0 else 0
         lvl_up_progress = min(lvl_up_progress, 1)  # Ограничиваем от 0 до 1
         logger.debug(
