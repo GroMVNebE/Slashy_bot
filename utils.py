@@ -6,6 +6,7 @@ import discord
 from dotenv import load_dotenv
 import hashlib
 import hmac
+import math
 
 # Инициализируем логгер для этого модуля
 logger = logging.getLogger('slashy.utils')
@@ -455,3 +456,25 @@ def get_voice_hashes(user_id: int, guild_id: int) -> tuple[str, str]:
                           {'type': 'gid', 'data': str(guild_id)}], 'voice')
     gid_hash = hash_data([{'type': 'gid', 'data': str(guild_id)}], 'voice')
     return uid_hash, gid_hash
+
+
+def make_log_xp(threshold: float, base_xp: float, point: float, point_xp: float, cap: float):
+    """### Фабрика логарифмических функций начисления опыта
+    xp(x) = base_xp + k * ln(x / threshold), причём xp(point) = point_xp
+
+    Args:
+        threshold: Минимальный порог начисления опыта
+        base_xp: Опыт на пороге (x == threshold)
+        point: Опорная точка с заданным кол-вом опыта
+        point_xp: Опыт в опорной точке
+        cap: Значение x, выше которого опыт не растёт
+    """
+    k = (point_xp - base_xp) / math.log(point / threshold)
+
+    def xp_func(x: float) -> int:
+        if x < threshold:
+            return 0
+        x = min(x, cap)
+        return max(1, round(base_xp + k * math.log(x / threshold)))
+
+    return xp_func

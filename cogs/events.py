@@ -16,6 +16,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger('slashy.events')
 
 
+_message_curve = make_log_xp(
+    threshold=5, base_xp=5, point=10, point_xp=10, cap=100)
+
+_session_curve = make_log_xp(
+    threshold=10, base_xp=10, point=70, point_xp=30, cap=480)
+
+ATTACHMENT_ONLY_XP = 5
+
+
 class Events(commands.Cog):
     """### Модуль обработки Событий в Discord
     Обрабатывает:
@@ -98,7 +107,11 @@ class Events(commands.Cog):
         # Начисляем опыт за сообщение
         logger.info(
             f'Начисляется опыт за сообщение (длина: {len(message.content)}, кол-во слов: {len(message.content.split())})')
-        await add_xp(user_id=message.author.id, guild_id=message.author.guild.id, xp=10, pool=self.bot.db_pool)
+        if len(message.content) == 0:
+            xp = ATTACHMENT_ONLY_XP
+        else:
+            xp = _message_curve(len(message.content))
+        await add_xp(user_id=message.author.id, guild_id=message.author.guild.id, xp=xp, pool=self.bot.db_pool)
 
     async def get_valid_voice_members(self, channel: discord.VoiceChannel | discord.StageChannel, filtered: bool = False) -> list[discord.Member]:
         """### Функция для получения валидных пользователей в голосовом канале
@@ -138,7 +151,7 @@ class Events(commands.Cog):
                 "SELECT user_id, vc_stats_enabled FROM user_settings WHERE guild_id = $1",
                 channel.guild.id
             )
-            user_settings_dict = {r['user_id']                                  : r['vc_stats_enabled'] for r in settings}
+            user_settings_dict = {r['user_id']: r['vc_stats_enabled'] for r in settings}
             # Собираем список пользователей, у которых разрешён сбор статистики
             valid_members = []
             for m in channel.members:
@@ -252,6 +265,10 @@ class Events(commands.Cog):
                         """,
                             uid_hash, gid_hash, ssn_start, ssn_end, ssn_duration
                         )
+                    logger.debug(
+                        f'Начисление опыта за сессию "общения" пользователя {get_info(user_id)}')
+                    xp = _session_curve(ssn_duration // 60)
+                    await add_xp(user_id, guild_id, xp, self.bot.db_pool)
                 logger.debug(
                     f'Сохранение данных {"периода" if autosave else "сессии"} "общения" пользователя {get_info(user_id)} в БД: Успешно')
         except Exception as e:
