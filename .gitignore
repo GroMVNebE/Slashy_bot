@@ -213,3 +213,5 @@ test.py
 rules.docx
 ~$rules.docx
 ~*.tmp
+CLAUDE.md
+.claude
