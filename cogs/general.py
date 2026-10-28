@@ -373,7 +373,7 @@ class General(commands.Cog):
             return
         # Вычисляем прогресс до следующего уровня
         required_xp = (
-                int(100 * lvl + 50 * lvl**1.688) + 9) // 10 * 10
+            int(100 * lvl + 50 * lvl**1.688) + 9) // 10 * 10
         lvl_up_progress = xp / required_xp if required_xp > 0 else 0
         lvl_up_progress = min(lvl_up_progress, 1)  # Ограничиваем от 0 до 1
         logger.debug(
@@ -1191,6 +1191,71 @@ class General(commands.Cog):
             self.user = user
             self.day_offset = 0
             self.initial_interaction = initial_interaction
+            self.collection_warning: str | None = None
+
+        async def get_collection_warning(self) -> str | None:
+            """### Функция для проверки настроек сбора детальных сессий "общения"
+            Проверяет настройки сервера и пользователя, от которых зависит сохранение детальных сессий
+
+            Returns:
+                str | None: Причина, по которой сбор детальных сессий не ведётся, или None, если сбор ведётся
+            """
+            logger.debug(
+                f'Проверка настроек сбора детальных сессий для пользователя {get_info(self.user)}')
+            try:
+                async with self.bot.db_pool.acquire() as con:
+                    guild_set = await con.fetchrow(
+                        "SELECT vc_stats_enabled FROM guild_settings WHERE guild_id = $1",
+                        self.user.guild.id
+                    )
+                    user_set = await con.fetchrow(
+                        """
+                        SELECT vc_stats_enabled, vc_detailed_stats_enabled
+                        FROM user_settings
+                        WHERE guild_id = $1 AND user_id = $2
+                        """,
+                        self.user.guild.id,
+                        self.user.id
+                    )
+            except Exception as e:
+                logger.error(
+                    f'Ошибка при проверке настроек сбора детальных сессий для пользователя {get_info(self.user)}: {e}', exc_info=True)
+                return None
+            if not guild_set or guild_set['vc_stats_enabled'] is not True:
+                return 'На этом сервере отключен сбор **статистики времени "общения"**. Обратитесь к администрации сервера'
+            if user_set and user_set['vc_stats_enabled'] is False:
+                return 'Вы отключили **Сбор статистики времени "общения"**. Включить его можно в `/setup`'
+            if not user_set or user_set['vc_detailed_stats_enabled'] is not True:
+                return '**Сбор детальных сессий "общения"** отключен. Включить его можно в `/setup`'
+            return None
+
+        def build_ssn_embed(self, target_date: date, total_seconds: int) -> discord.Embed:
+            """### Функция для создания Embed с детальными сессиями за день
+            При отключенном сборе детальных сессий добавляет предупреждение с причиной
+
+            Args:
+                target_date (date): Отображаемый день
+                total_seconds (int): Суммарное время "общения" за день в секундах
+
+            Returns:
+                discord.Embed: Embed с информацией о сессиях за день
+            """
+            readable_date = target_date.strftime('%d.%m.%Y')
+            total_hours = total_seconds / 3600
+            fields = None
+            color = discord.Color.from_rgb(88, 101, 242)
+            if self.collection_warning:
+                fields = [{'name': '⚠️ Сбор сессий отключен',
+                           'value': self.collection_warning, 'inline': False}]
+                color = discord.Color.orange()
+            embed = create_embed(
+                title=f"Детализированные сессии — {self.user.display_name}",
+                description=f"**Дата:** {readable_date}\n**Всего за день:** {total_hours:.2f} ч. ({readable_time(total_seconds)})",
+                color=color,
+                fields=fields
+            )
+            embed.set_image(url="attachment://daily_plot.png")
+            return embed
 
         async def on_timeout(self):
             try:
@@ -1208,17 +1273,9 @@ class General(commands.Cog):
             sessions, total_seconds = await self.get_daily_sessions(target_date)
 
             plot_file = self.generate_daily_plot(
-                target_date, sessions)
+                target_date, sessions, self.collection_warning is not None)
 
-            readable_date = target_date.strftime('%d.%m.%Y')
-            total_hours = total_seconds / 3600
-
-            embed = discord.Embed(
-                title=f"Детализированные сессии — {self.user.display_name}",
-                description=f"**Дата:** {readable_date}\n**Всего за день:** {total_hours:.2f} ч. ({readable_time(total_seconds)})",
-                color=0x5865F2
-            )
-            embed.set_image(url="attachment://daily_plot.png")
+            embed = self.build_ssn_embed(target_date, total_seconds)
 
             file = discord.File(plot_file, filename="daily_plot.png")
 
@@ -1270,7 +1327,7 @@ class General(commands.Cog):
 
             return sessions, int(total_seconds)
 
-        def generate_daily_plot(self, target_date: date, sessions: list[tuple[datetime, datetime]]) -> io.BytesIO:
+        def generate_daily_plot(self, target_date: date, sessions: list[tuple[datetime, datetime]], collection_disabled: bool = False) -> io.BytesIO:
             logger.debug(
                 f'Отрисовка графика сессий пользователя {get_info(self.user)} за {target_date}')
             fig, ax = plt.subplots(figsize=(10, 3.5), dpi=120)
@@ -1381,21 +1438,19 @@ class General(commands.Cog):
         view = self.VoiceDetailedSessionsView(
             self.bot, interaction.user, interaction)
 
+        # Проверяем настройки сбора один раз - результат используется и при переключении дней
+        view.collection_warning = await view.get_collection_warning()
+        if view.collection_warning:
+            logger.debug(
+                f'У пользователя {get_info(interaction.user)} не ведётся сбор детальных сессий - добавляем предупреждение')
+
         target_date = date.today()
         sessions, total_seconds = await view.get_daily_sessions(target_date)
 
         plot_file = view.generate_daily_plot(
-            target_date, sessions)
+            target_date, sessions, view.collection_warning is not None)
 
-        readable_date = target_date.strftime('%d.%m.%Y')
-        total_hours = total_seconds / 3600
-
-        embed = create_embed(
-            title=f"Детализированные сессии — {interaction.user.display_name}",
-            description=f"**Дата:** {readable_date}\n**Всего за день:** {total_hours:.2f} ч. ({readable_time(total_seconds)})",
-            color=discord.Color.from_rgb(88, 101, 242)
-        )
-        embed.set_image(url="attachment://daily_plot.png")
+        embed = view.build_ssn_embed(target_date, total_seconds)
 
         file = discord.File(plot_file, filename="daily_plot.png")
 

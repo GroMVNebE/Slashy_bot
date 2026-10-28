@@ -57,6 +57,8 @@ class Events(commands.Cog):
         self.save_sessions_task.start()
         # Запускаем фоновую задачу удаления истёкших сессий
         self.delete_pending_sessions_task.start()
+        # Запускаем фоновую задачу удаления детальных сессий общения спустя 30 дней после появления записи
+        self.delete_old_sessions_task.start()
 
     async def cog_unload(self) -> None:
         """### Обработчик выгрузки кога
@@ -68,6 +70,7 @@ class Events(commands.Cog):
             'Начато выполнение cog_unload - сохранение сессий "общения"')
         self.save_sessions_task.cancel()
         self.delete_pending_sessions_task.cancel()
+        self.delete_old_sessions_task.cancel()
         # Сохраняем все сессии "общения" пользователей
         try:
             for user_id, data in list(self.active_sessions.items()):
