@@ -108,6 +108,20 @@ async def setup_database(pool: asyncpg.Pool) -> None:
         raise e
 
 
+def get_required_xp(level: int) -> int:
+    """### Функция для вычисления опыта, необходимого для повышения уровня
+    Возвращает количество опыта, которое нужно набрать на текущем уровне для перехода на следующий
+    (округляется вверх до десятков)
+
+    Args:
+        level (int): Текущий уровень пользователя
+
+    Returns:
+        int: Требуемое количество опыта
+    """
+    return (int(100 * level + 50 * level**1.688) + 9) // 10 * 10
+
+
 async def add_xp(user_id: int, guild_id: int, xp: int, pool: asyncpg.Pool) -> None:
     """### Функция начисления опыта пользователю
     Добавляет пользователю переданное кол-во опыта и обновляет его уровень при необходимости
@@ -150,8 +164,7 @@ async def add_xp(user_id: int, guild_id: int, xp: int, pool: asyncpg.Pool) -> No
             curr_xp = row['xp']
             curr_level = row['level']
             # Вычисляем требуемый опыт для следующего уровня
-            required_xp = (
-                int(100 * curr_level + 50 * curr_level**1.688) + 9) // 10 * 10
+            required_xp = get_required_xp(curr_level)
             # Поднимаем уровень пользователя, если опыта достаточно
             if curr_xp >= required_xp:
                 logger.debug(
@@ -160,8 +173,7 @@ async def add_xp(user_id: int, guild_id: int, xp: int, pool: asyncpg.Pool) -> No
             while curr_xp >= required_xp:
                 curr_xp -= required_xp
                 curr_level += 1
-                required_xp = (
-                    int(100 * curr_level + 50 * curr_level**1.688) + 9) // 10 * 10
+                required_xp = get_required_xp(curr_level)
                 level_up = True
             # Обновляем уровень и оставшийся опыт в базе данных, если уровень был повышен
             if level_up:
