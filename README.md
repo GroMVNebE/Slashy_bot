@@ -57,3 +57,5 @@ python launch.py
 ## Будет добавлено в будущих обновлениях 🎯
 *Ознакомиться с планами по обновлению бота можно в разделе **[issues](https://github.com/GroMVNebE/Slashy_bot/issues)** или в специальном разделе **[Roadmap](https://github.com/users/GroMVNebE/projects/2)**.*  
 *Если Вы хотите видеть свои идеи в **Slashy**, не стесняйтесь предлагать их в **[issues](https://github.com/GroMVNebE/Slashy_bot/issues)***
+
+![Tests](https://github.com/GroMVNebE/Slashy_bot/actions/workflows/python-app.yml/badge.svg)
