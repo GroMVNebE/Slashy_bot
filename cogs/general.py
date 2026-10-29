@@ -577,7 +577,8 @@ class General(commands.Cog):
                             # (300 -> 180 -> 140 -> 110 -> 90 -> 80 -> 70.. -> 60.. -> 50.. -> 40.. -> 30..)
                             base = 300 // tries**0.75
                             xp = max((base + 9) // 10 * 10, 30)
-                            await add_xp(user_id=user_id, guild_id=guild_id, xp=xp, pool=pool)
+                            if xp > 0:
+                                await add_xp(user_id=user_id, guild_id=guild_id, xp=xp, pool=pool)
                             logger.info(
                                 f'Пользователь {get_info(user_id)} угадал число {target} за {tries} попыток и получил {xp} XP')
                         self.view.stop()  # Останавливаем работу View
@@ -651,7 +652,7 @@ class General(commands.Cog):
         Args:
             interaction (discord.Interaction): Объект взаимодействия, содержащий подробные данные об отправленной команде
         """
-        if not type(interaction.user) is discord.Member:
+        if not isinstance(interaction.user, discord.Member):
             return
         logger.info(
             f'Пользователь {get_info(interaction.user)} вызвал команду /guess')
@@ -746,7 +747,7 @@ class General(commands.Cog):
             мин (int): Начало диапазона для генерации случайного числа
             макс (int): Конец диапазона для генерации случайного числа
         """
-        if not type(interaction.user) is discord.Member:
+        if not isinstance(interaction.user, discord.Member):
             return
         logger.info(
             f'Пользователь {get_info(interaction.user)} вызвал команду /rand для генерации случайного числа \
@@ -1092,7 +1093,7 @@ class General(commands.Cog):
     @app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.guild_id, i.user.id))
     async def voice(self, interaction: discord.Interaction, member: discord.Member | None = None):
         """### Команда для просмотра персональной статистики общения"""
-        if not self.bot.db_pool or not type(interaction.user) is discord.Member:
+        if not self.bot.db_pool or not isinstance(interaction.user, discord.Member):
             return
 
         logger.info(
