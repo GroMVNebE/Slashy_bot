@@ -306,7 +306,8 @@ async def create_default_user_settings(pool: asyncpg.Pool, member: discord.Membe
             """,
                 member.guild.id
             )
-            default = True if guild_setting else False
+            # Сбор по умолчанию включается, только если он разрешён на сервере (записи настроек сервера может не быть)
+            default = guild_setting is not None and guild_setting['vc_stats_enabled'] is True
             logger.debug(
                 'Создание записи со стандартными настройками пользователя')
             await con.execute(

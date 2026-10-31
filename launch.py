@@ -104,7 +104,7 @@ class Bot(commands.Bot):
         await super().close()
 
     async def on_tree_error(self, interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
-        if not type(interaction.user) is discord.Member:
+        if not isinstance(interaction.user, discord.Member):
             return
         # Если ошибка - ограничение по частоте использования команды
         if isinstance(error, discord.app_commands.CommandOnCooldown):

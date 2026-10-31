@@ -51,7 +51,7 @@ class ModuleSelect(discord.ui.Select):
             'Завершена инициализация меню выбора класса ModuleSelect')
 
     async def callback(self, interaction: discord.Interaction):
-        if not type(interaction.user) is discord.Member:
+        if not isinstance(interaction.user, discord.Member):
             return
         logger.debug(
             f'Пользователь {get_info(interaction.user)} выбрал {self.values[0]} в ModuleSelect')
@@ -137,7 +137,7 @@ class ActionSelect(discord.ui.Select):
             'Завершена инициализация меню выбора класса ActionSelect')
 
     async def callback(self, interaction: discord.Interaction):
-        if not type(interaction.user) is discord.Member:
+        if not isinstance(interaction.user, discord.Member):
             return
         logger.debug(
             f'Пользователь {get_info(interaction.user)} выбрал {self.values[0]} в ActionSelect')
@@ -249,6 +249,10 @@ user_settings = [
 - **'choices'** - *возможные значения ('name': str - название значения, 'value': Any - возможное значение)*"""
 
 
+SETTINGS_PER_PAGE = 5
+"""### Количество настроек на одной странице :class:`ManageSettings`"""
+
+
 class SettingChoiceButton(discord.ui.Button):
     """### Кнопка выбора конкретного значения настройки
     Создана для установки заранее определенного значения из списка choices"""
@@ -274,7 +278,7 @@ class SettingChoiceButton(discord.ui.Button):
         self.to_upd = to_upd
 
     async def callback(self, interaction: discord.Interaction):
-        if not type(interaction.user) is discord.Member:
+        if not isinstance(interaction.user, discord.Member):
             return
         logger.debug(
             f'Пользователь {get_info(interaction.user)} выбрал опцию {self.choice_name} для {self.setting["code"]}')
@@ -420,16 +424,10 @@ class ManageSettings(discord.ui.View):
         self.bot = bot
         self.category: Literal['user', 'server'] = category
         self.settings = server_settings if self.category == 'server' else user_settings
-        self.pages = []
         self.cur_page = 0
         logger.debug('Генерация страниц с настройками')
-        idx = 1
-        while idx <= len(self.settings):
-            page = []
-            while idx % 5 != 0 and idx <= len(self.settings):
-                page += [self.settings[idx-1]]
-                idx += 1
-            self.pages += [page]
+        self.pages = [self.settings[i:i + SETTINGS_PER_PAGE]
+                      for i in range(0, len(self.settings), SETTINGS_PER_PAGE)]
         self.select = None
 
     async def draw_page(self, interaction: discord.Interaction | None, update: bool = False):
@@ -439,7 +437,7 @@ class ManageSettings(discord.ui.View):
             interaction = self.last_interaction
         elif not interaction:
             return
-        if not interaction.guild or not type(interaction.user) is discord.Member:
+        if not interaction.guild or not isinstance(interaction.user, discord.Member):
             return
 
         logger.debug(
@@ -559,7 +557,7 @@ class UserSettingsButton(discord.ui.Button):
         self.bot = bot
 
     async def callback(self, interaction: discord.Interaction):
-        if not type(interaction.user) is discord.Member:
+        if not isinstance(interaction.user, discord.Member):
             return
         logger.debug(
             f'Пользователь {get_info(interaction.user)} выбрал категорию "Пользовательские настройки"')
@@ -575,7 +573,7 @@ class ServerSettingsButton(discord.ui.Button):
         self.bot = bot
 
     async def callback(self, interaction: discord.Interaction):
-        if not type(interaction.user) is discord.Member:
+        if not isinstance(interaction.user, discord.Member):
             return
         logger.debug(
             f'Пользователь {get_info(interaction.user)} выбрал категорию "Настройки сервера"')
@@ -689,7 +687,7 @@ class Admin(commands.Cog):
     @app_commands.command(name="setup", description="Настройки бота")
     @app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.guild_id, i.user.id))
     async def setup(self, interaction: discord.Interaction):
-        if not type(interaction.user) is discord.Member:
+        if not isinstance(interaction.user, discord.Member):
             return
         logger.info(
             f'Пользователь {get_info(interaction.user)} вызвал настройки бота на сервере {get_info(interaction.guild)}')

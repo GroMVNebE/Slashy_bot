@@ -215,3 +215,4 @@ rules.docx
 ~*.tmp
 CLAUDE.md
 .claude
+.vscode
