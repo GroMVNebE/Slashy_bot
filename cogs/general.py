@@ -900,12 +900,10 @@ class General(commands.Cog):
                         values.append(seconds)
 
                 elif self.current_period == "month":
-                    current_year = today.year
-                    current_month = today.month + self.offset
-
-                    if current_month <= 0:
-                        current_year -= 1
-                        current_month += 12
+                    # Считаем месяц через общее число месяцев, чтобы смещение могло уходить на любое кол-во лет назад
+                    current_year, month_idx = divmod(
+                        today.year * 12 + today.month - 1 + self.offset, 12)
+                    current_month = month_idx + 1
 
                     start_of_month = date(current_year, current_month, 1)
                     if current_month == 12:
@@ -1167,6 +1165,7 @@ class General(commands.Cog):
                 color=discord.Color.red()
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
 
         logger.debug('Создаём объект класса VoiceStatsView')
         view = self.VoiceStatsView(self.bot, target_member, interaction)

@@ -249,6 +249,10 @@ user_settings = [
 - **'choices'** - *возможные значения ('name': str - название значения, 'value': Any - возможное значение)*"""
 
 
+SETTINGS_PER_PAGE = 5
+"""### Количество настроек на одной странице :class:`ManageSettings`"""
+
+
 class SettingChoiceButton(discord.ui.Button):
     """### Кнопка выбора конкретного значения настройки
     Создана для установки заранее определенного значения из списка choices"""
@@ -420,16 +424,10 @@ class ManageSettings(discord.ui.View):
         self.bot = bot
         self.category: Literal['user', 'server'] = category
         self.settings = server_settings if self.category == 'server' else user_settings
-        self.pages = []
         self.cur_page = 0
         logger.debug('Генерация страниц с настройками')
-        idx = 1
-        while idx <= len(self.settings):
-            page = []
-            while idx % 5 != 0 and idx <= len(self.settings):
-                page += [self.settings[idx-1]]
-                idx += 1
-            self.pages += [page]
+        self.pages = [self.settings[i:i + SETTINGS_PER_PAGE]
+                      for i in range(0, len(self.settings), SETTINGS_PER_PAGE)]
         self.select = None
 
     async def draw_page(self, interaction: discord.Interaction | None, update: bool = False):

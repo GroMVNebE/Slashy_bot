@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
@@ -7,7 +7,7 @@ import discord
 import pytest
 
 from cogs.events import ATTACHMENT_ONLY_XP, Events, _message_curve
-from factories import (count_rows, insert_guild_settings, insert_user_settings, make_guild,
+from factories import (count_rows, insert_detailed_session, insert_guild_settings, insert_user_settings, make_guild,
                        make_member, make_voice_channel, make_voice_state)
 from utils import get_voice_hashes
 
@@ -213,3 +213,48 @@ async def test_on_message_short_text_without_xp(events_cog, db_pool):
 async def test_on_message_from_bot_ignored(events_cog, db_pool):
     await events_cog.on_message(make_message(make_member(1, 10, bot=True), 'Сообщение бота'))
     assert await count_rows(db_pool, 'user_levels') == 0
+
+
+# === Фоновые задачи и выгрузка кога ===
+def make_active_session(duration: int, guild_id: int = 10) -> dict:
+    """### Активная сессия (пользователь всё ещё в голосовом канале)"""
+    session = make_session(duration, guild_id)
+    session.pop('left_at')
+    return session
+
+
+async def test_cog_unload_saves_all_sessions(events_cog, db_pool):
+    pending = make_session(600, left_at=time.time() - 30)
+    pending['expires_at'] = time.time() + 150
+    events_cog.active_sessions = {1: make_active_session(600)}
+    events_cog.pending_sessions = {2: pending}
+
+    await events_cog.cog_unload()
+
+    assert events_cog.active_sessions == {} and events_cog.pending_sessions == {}
+    assert await db_pool.fetchval("SELECT COUNT(DISTINCT user_id) FROM voice_stats") == 2
+    assert await count_rows(db_pool, 'voice_max_sessions') == 2
+
+
+async def test_save_sessions_task_autosaves_period(events_cog, db_pool):
+    session = make_active_session(600)
+    events_cog.active_sessions = {1: session}
+
+    await events_cog.save_sessions_task()
+
+    assert await db_pool.fetchval("SELECT seconds FROM voice_stats WHERE user_id = 1") == pytest.approx(600, abs=2)
+    # Начало периода сдвигается, чтобы следующее автосохранение не посчитало это время повторно
+    assert time.time() - events_cog.active_sessions[1]['prd_start'] < 5
+    assert await count_rows(db_pool, 'voice_max_sessions') == 0
+
+
+async def test_delete_old_sessions_task(events_cog, db_pool):
+    now = datetime.now(MSK)
+    await insert_detailed_session(db_pool, 1, 10, now - timedelta(days=40), now - timedelta(days=40, hours=-1))
+    await insert_detailed_session(db_pool, 1, 10, now - timedelta(days=1), now - timedelta(hours=23))
+
+    await events_cog.delete_old_sessions_task()
+
+    assert await count_rows(db_pool, 'voice_detailed_sessions') == 1
+    start = await db_pool.fetchval("SELECT start_time FROM voice_detailed_sessions")
+    assert now - start < timedelta(days=2)

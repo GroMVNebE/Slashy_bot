@@ -1,5 +1,5 @@
 """### Фабрики заглушек Discord и хелперы для заполнения тестовой БД"""
-from datetime import datetime
+from datetime import date, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import asyncpg
@@ -8,15 +8,19 @@ import discord
 from utils import get_voice_hashes
 
 
-def make_guild(guild_id: int = 10) -> MagicMock:
+def make_guild(guild_id: int = 10, owner_id: int = 999) -> MagicMock:
     """### Заглушка сервера Discord"""
     guild = MagicMock(spec=discord.Guild)
     guild.id = guild_id
+    guild.name = 'Тестовый сервер'
+    guild.owner_id = owner_id
+    guild.owner = MagicMock(spec=discord.Member)
     return guild
 
 
 def make_member(user_id: int = 1, guild_id: int = 10, display_name: str = 'Тестер',
-                bot: bool = False, deaf: bool = False, guild: MagicMock | None = None) -> MagicMock:
+                bot: bool = False, deaf: bool = False, guild: MagicMock | None = None,
+                administrator: bool = False, manage_guild: bool = False) -> MagicMock:
     """### Заглушка участника сервера
     Проходит проверку isinstance(member, discord.Member)"""
     member = MagicMock(spec=discord.Member)
@@ -24,6 +28,9 @@ def make_member(user_id: int = 1, guild_id: int = 10, display_name: str = 'Те�
     member.display_name = display_name
     member.bot = bot
     member.guild = guild or make_guild(guild_id)
+    member.guild_permissions = MagicMock(spec=discord.Permissions)
+    member.guild_permissions.administrator = administrator
+    member.guild_permissions.manage_guild = manage_guild
     member.voice = MagicMock(spec=discord.VoiceState)
     member.voice.deaf = False
     member.voice.self_deaf = deaf
@@ -86,13 +93,14 @@ async def insert_guild_settings(pool: asyncpg.Pool, guild_id: int = 10,
 
 
 async def insert_user_settings(pool: asyncpg.Pool, user_id: int = 1, guild_id: int = 10,
-                               vc_stats_enabled: bool = True, detailed: bool = False) -> None:
+                               vc_stats_enabled: bool = True, detailed: bool = False,
+                               privacy: bool = True) -> None:
     await pool.execute(
         """
         INSERT INTO user_settings (guild_id, user_id, vc_stats_enabled, vc_stats_privacy, vc_detailed_stats_enabled)
-        VALUES ($1, $2, $3, TRUE, $4)
+        VALUES ($1, $2, $3, $5, $4)
         """,
-        guild_id, user_id, vc_stats_enabled, detailed)
+        guild_id, user_id, vc_stats_enabled, detailed, privacy)
 
 
 async def insert_detailed_session(pool: asyncpg.Pool, user_id: int, guild_id: int,
@@ -104,6 +112,18 @@ async def insert_detailed_session(pool: asyncpg.Pool, user_id: int, guild_id: in
         VALUES ($1, $2, $3, $4, $5)
         """,
         uid_hash, gid_hash, start, end, int((end - start).total_seconds()))
+
+
+async def insert_voice_stats(pool: asyncpg.Pool, user_id: int, guild_id: int, day: date,
+                             seconds: int, max_seconds: int | None = None) -> None:
+    """### Добавляет время "общения" за день и, при необходимости, максимальную сессию за день"""
+    await pool.execute(
+        "INSERT INTO voice_stats (guild_id, user_id, day, seconds) VALUES ($1, $2, $3, $4)",
+        guild_id, user_id, day, seconds)
+    if max_seconds is not None:
+        await pool.execute(
+            "INSERT INTO voice_max_sessions (guild_id, user_id, day, max_seconds) VALUES ($1, $2, $3, $4)",
+            guild_id, user_id, day, max_seconds)
 
 
 async def count_rows(pool: asyncpg.Pool, table: str) -> int:
