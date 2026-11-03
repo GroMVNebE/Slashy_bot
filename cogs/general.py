@@ -302,16 +302,16 @@ class General(commands.Cog):
         self.username_font = ImageFont.truetype(
             'assets/NishikiTeki-MVxaJ.ttf', 36)
 
-    @app_commands.command(name='lvl', description='Выводит Ваш текущий уровень')
+    @app_commands.command(name='lvl', description='Выводит уровень выбранного пользователя')
     @app_commands.guild_only()
     @app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.guild_id, i.user.id))
-    async def lvl(self, interaction: discord.Interaction):
+    async def lvl(self, interaction: discord.Interaction, member: discord.Member | None = None):
         """### Выводит данные об уровне и опыте пользователя
-        Выводит карточку с аватаром, никнеймом, уровнем, опытом и прогрессом до следующего уровня пользователя,
-        вызвавшего команду
+        Выводит карточку с аватаром, никнеймом, уровнем, опытом и прогрессом до следующего уровня выбранного пользователя
 
         Args:
-            interaction (discord.Interaction): Объект взаимодействия, содержащий подробные данные об отправленной команде
+            interaction (:class:`discord.Interaction`): Объект взаимодействия, содержащий подробные данные об отправленной команде
+            member (:class:`discord.Member`): Пользователь, чей уровень нужно вывести
         """
         logger.info(
             f'Пользователь {get_info(interaction.user)} вызвал команду /lvl')
@@ -322,7 +322,7 @@ class General(commands.Cog):
             )
             embed = create_embed(
                 title='Ошибка!',
-                description=f'В процессе создания карточки с Вашим уровнем произошла ошибка. Пожалуйста, попробуйте позже',
+                description=f'В процессе создания карточки с уровнем произошла ошибка. Пожалуйста, попробуйте позже',
                 color=discord.Color.red(),
             )
             await interaction.response.send_message(
@@ -330,7 +330,17 @@ class General(commands.Cog):
                 ephemeral=True,
             )
             return
-        user = interaction.user
+        # Определяем пользователя, уровень которого будем запрашивать
+        user = interaction.user if member is None else member
+        if user.bot:
+            embed = create_embed(
+                title='Ошибка!',
+                description=f'Данную команду нельзя применять к ботам',
+                color=discord.Color.red(),
+            )
+            await interaction.response.send_message(embed=embed)
+            return
+        guild_id = user.guild.id
         # Отправляем ответ, что бот обрабатывает запрос (может занять некоторое время)
         await interaction.response.defer(ephemeral=True)
         # Получаем данные об уровне и опыте пользователя из базы данных
@@ -343,19 +353,11 @@ class General(commands.Cog):
                     SELECT xp, level FROM user_levels
                     WHERE guild_id = $1 AND user_id = $2
                 """,
-                    interaction.guild_id,
+                    guild_id,
                     user.id,
                 )
                 if not row:
                     xp, lvl = 0, 1
-                    await connection.execute(
-                        """
-                        INSERT INTO user_levels (guild_id, user_id)
-                        VALUES ($1, $2)
-                    """,
-                        interaction.guild_id,
-                        user.id,
-                    )
                 else:
                     xp, lvl = row['xp'], row['level']
             logger.debug(
@@ -366,7 +368,7 @@ class General(commands.Cog):
             )
             embed = create_embed(
                 title='Ошибка!',
-                description=f'В процессе создания карточки с Вашим уровнем произошла ошибка. Пожалуйста, попробуйте позже',
+                description=f'В процессе создания карточки с уровнем произошла ошибка. Пожалуйста, попробуйте позже',
                 color=discord.Color.red(),
             )
             await interaction.followup.send(embed=embed)
@@ -398,7 +400,7 @@ class General(commands.Cog):
                 )
                 embed = create_embed(
                     title='Ошибка!',
-                    description=f'В процессе создания карточки с Вашим уровнем произошла ошибка. Пожалуйста, попробуйте позже',
+                    description=f'В процессе создания карточки с уровнем произошла ошибка. Пожалуйста, попробуйте позже',
                     color=discord.Color.red(),
                 )
                 await interaction.followup.send(embed=embed)
@@ -457,13 +459,13 @@ class General(commands.Cog):
             buff.close()
             ava_buff.close()
             logger.info(
-                f'Пользователь {get_info(interaction.user)} получил карточку со своим уровнем (уровень {lvl}, опыт {xp}/{required_xp})')
+                f'Пользователь {get_info(interaction.user)} получил карточку с уровнем пользователя {get_info(user)} (уровень {lvl}, опыт {xp}/{required_xp})')
         except Exception as e:
             logger.error(
                 f'Ошибка при генерации карточки уровня для пользователя {get_info(user)}: {e}', exc_info=True)
             embed = create_embed(
                 title='Ошибка!',
-                description=f'В процессе создания карточки с Вашим уровнем произошла ошибка. Пожалуйста, попробуйте позже',
+                description=f'В процессе создания карточки с уровнем произошла ошибка. Пожалуйста, попробуйте позже',
                 color=discord.Color.red(),
             )
             await interaction.followup.send(embed=embed)
