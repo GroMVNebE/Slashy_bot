@@ -1,3 +1,6 @@
+import os
+from unittest import mock
+
 import discord
 import pytest
 
@@ -41,14 +44,35 @@ def test_readable_time(seconds, expected):
 
 
 # === get_required_xp ===
-def test_get_required_xp_first_level():
-    assert get_required_xp(1) == 150
-
-
-def test_get_required_xp_rounded_and_increasing():
+def test_get_required_xp_valid_attributes():
     values = [get_required_xp(level) for level in range(1, 101)]
-    assert all(v % 10 == 0 for v in values)
-    assert all(a < b for a, b in zip(values, values[1:]))
+    assert all(val % 10 == 0 for val in values)
+    assert all(values[i] < values[i+1] for i in range(len(values)-1))
+
+
+@pytest.mark.parametrize('level, value', [
+    pytest.param(1, 150, id='start-level'),
+    pytest.param(5, 1180),
+    pytest.param(10, 3080),
+    pytest.param(15, 5500),
+    pytest.param(25, 11640),
+    pytest.param(50, 33050),
+    pytest.param(75, 61560),
+    pytest.param(100, 96100),
+])
+def test_get_required_xp_known_values(level, value):
+    assert get_required_xp(level) == value
+
+
+@pytest.mark.parametrize('level, match', [
+    pytest.param(0, '0 <= 0',
+                 id='zero-level'),
+    pytest.param(-2, '-2 <= 0',
+                 id='negative-level'),
+])
+def test_get_required_xp_invalid(level, match):
+    with pytest.raises(ValueError, match=match):
+        get_required_xp(level)
 
 
 # === make_log_xp ===
@@ -139,25 +163,39 @@ def test_get_voice_hashes_matches_hash_data():
 
 
 # === get_env ===
-ENV_KEY = 'SLASHY_TEST_VARIABLE'
+ENV = {'VALID': 'valid', 'BLANK': '', 'LONG_BLANK': '   ', 'SPACES': '  123  '}
 
 
-def test_get_env_value(monkeypatch):
-    monkeypatch.setenv(ENV_KEY, 'value')
-    assert get_env(ENV_KEY) == 'value'
+@mock.patch.dict(os.environ, ENV, clear=True)
+@pytest.mark.parametrize('val, default, expected', [
+    pytest.param('VALID', None, 'valid',
+                 id='existing-value-without-default'),
+    pytest.param('VALID', 'invalid', 'valid',
+                 id='existing-value-with-default'),
+    pytest.param('INVALID', 'valid', 'valid',
+                 id='nonexisting-value-with-default'),
+    pytest.param('BLANK', 'default', 'default', id='blank-value-with-default'),
+    pytest.param('LONG_BLANK', 'default', 'default',
+                 id='long-blank-value-with-default'),
+    pytest.param('SPACES', None, '123',
+                 id='value-with-spaces'),
+])
+def test_get_env_valid(val, default, expected):
+    assert get_env(val, default) == expected
 
 
-def test_get_env_default(monkeypatch):
-    monkeypatch.delenv(ENV_KEY, raising=False)
-    assert get_env(ENV_KEY, 'default') == 'default'
-    monkeypatch.setenv(ENV_KEY, '')
-    assert get_env(ENV_KEY, 'default') == 'default'
-
-
-def test_get_env_missing(monkeypatch):
-    monkeypatch.delenv(ENV_KEY, raising=False)
-    with pytest.raises(ValueError):
-        get_env(ENV_KEY)
+@mock.patch.dict(os.environ, ENV, clear=True)
+@pytest.mark.parametrize('val, match', [
+    pytest.param('INVALID', 'INVALID не задана',
+                 id='nonexisting-value-without-default'),
+    pytest.param('BLANK', 'BLANK не задана',
+                 id='blank-value-without-default'),
+    pytest.param('LONG_BLANK',
+                 'LONG_BLANK не задана', id='long-blank-value-without-default')
+])
+def test_get_env_invalid(val, match):
+    with pytest.raises(ValueError, match=match):
+        get_env(val)
 
 
 # === create_embed ===

@@ -11,6 +11,7 @@ async def get_level(pool, user_id=1, guild_id=10):
 
 # === add_xp ===
 async def test_add_xp_new_user(db_pool):
+    assert await get_level(db_pool) is None
     await add_xp(user_id=1, guild_id=10, xp=40, pool=db_pool)
     row = await get_level(db_pool)
     assert (row['xp'], row['level']) == (40, 1)
@@ -21,6 +22,12 @@ async def test_add_xp_accumulates(db_pool):
     await add_xp(1, 10, 30, db_pool)
     row = await get_level(db_pool)
     assert (row['xp'], row['level']) == (70, 1)
+
+
+async def test_add_xp_level_up_without_remainder(db_pool):
+    await add_xp(1, 10, get_required_xp(1), db_pool)
+    row = await get_level(db_pool)
+    assert (row['xp'], row['level']) == (0, 2)
 
 
 async def test_add_xp_level_up_with_remainder(db_pool):
@@ -70,6 +77,8 @@ async def test_create_default_user_settings_guild_disabled(db_pool):
     await create_default_user_settings(db_pool, make_member(1, 10))
     row = await db_pool.fetchrow("SELECT * FROM user_settings WHERE guild_id = 10 AND user_id = 1")
     assert row['vc_stats_enabled'] is False
+    assert row['vc_stats_privacy'] is True
+    assert row['vc_detailed_stats_enabled'] is False
 
 
 async def test_create_default_user_settings_guild_enabled(db_pool):
@@ -77,4 +86,5 @@ async def test_create_default_user_settings_guild_enabled(db_pool):
     await create_default_user_settings(db_pool, make_member(1, 10))
     row = await db_pool.fetchrow("SELECT * FROM user_settings WHERE guild_id = 10 AND user_id = 1")
     assert row['vc_stats_enabled'] is True
+    assert row['vc_stats_privacy'] is True
     assert row['vc_detailed_stats_enabled'] is False
