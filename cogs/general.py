@@ -871,20 +871,17 @@ class General(commands.Cog):
             if not self.bot.db_pool:
                 return [], [], "Ошибка Базы Данных"
 
-            today = date.today()
             labels = []
             values = []
-            range_text = ""
+            start, end = get_period_range(
+                self.current_period, self.offset, date.today())
+            range_text = f"{start.strftime('%d.%m.%Y')} — {end.strftime('%d.%m.%Y')}"
 
             async with self.bot.db_pool.acquire() as conn:
                 tbl_name = 'voice_stats' if self.mode == 'total' else 'voice_max_sessions'
                 val_name = 'seconds' if self.mode == 'total' else 'max_seconds'
                 if self.current_period == "week":
-                    start_of_week = today - \
-                        timedelta(days=today.weekday()) + \
-                        timedelta(weeks=self.offset)
-                    end_of_week = start_of_week + timedelta(days=6)
-                    range_text = f"{start_of_week.strftime('%d.%m.%Y')} — {end_of_week.strftime('%d.%m.%Y')}"
+                    start_of_week, end_of_week = start, end
                     rows = await conn.fetch(
                         f"""
                         SELECT day, {val_name} FROM {tbl_name}
@@ -902,19 +899,7 @@ class General(commands.Cog):
                         values.append(seconds)
 
                 elif self.current_period == "month":
-                    # Считаем месяц через общее число месяцев, чтобы смещение могло уходить на любое кол-во лет назад
-                    current_year, month_idx = divmod(
-                        today.year * 12 + today.month - 1 + self.offset, 12)
-                    current_month = month_idx + 1
-
-                    start_of_month = date(current_year, current_month, 1)
-                    if current_month == 12:
-                        end_of_month = date(current_year, 12, 31)
-                    else:
-                        end_of_month = date(
-                            current_year, current_month + 1, 1) - timedelta(days=1)
-
-                    range_text = f"{start_of_month.strftime('%d.%m.%Y')} — {end_of_month.strftime('%d.%m.%Y')}"
+                    start_of_month, end_of_month = start, end
                     rows = await conn.fetch(
                         f"""
                         SELECT day, {val_name} FROM {tbl_name}
@@ -935,12 +920,7 @@ class General(commands.Cog):
                         values.append(seconds)
 
                 elif self.current_period == "year":
-                    target_year = today.year + self.offset
-                    start_of_year = date(target_year, 1, 1)
-                    end_of_year = date(target_year, 12, 31)
-
-                    range_text = f"{start_of_year.strftime('%d.%m.%Y')} — {end_of_year.strftime('%d.%m.%Y')}"
-
+                    start_of_year, end_of_year = start, end
                     fnc_name = 'SUM' if self.mode == 'total' else 'MAX'
                     rows = await conn.fetch(
                         f"""
