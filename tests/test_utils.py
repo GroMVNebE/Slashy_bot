@@ -4,8 +4,10 @@ from unittest import mock
 import discord
 import pytest
 
-from utils import (create_embed, get_env, get_info, get_plural, get_required_xp,
-                   get_voice_hashes, hash_data, make_log_xp, readable_time)
+from datetime import date
+
+from utils import (create_embed, get_env, get_info, get_period_range, get_plural, get_required_xp,
+                   get_voice_hashes, hash_data, make_log_xp, readable_time, short_time)
 from cogs.events import _message_curve, _session_curve
 
 FORMS = ('единица', 'единицы', 'единиц')
@@ -41,6 +43,43 @@ def test_readable_time_invalid(seconds):
 ])
 def test_readable_time(seconds, expected):
     assert readable_time(seconds) == expected
+
+
+# === short_time ===
+@pytest.mark.parametrize('seconds, expected', [
+    (0, '< 1 мин'),
+    (59, '< 1 мин'),
+    (60, '1 мин'),
+    (45 * 60 + 30, '45 мин'),
+    (3600, '1 ч'),
+    (3660, '1 ч 1 мин'),
+    (12 * 3600 + 5 * 60, '12 ч 5 мин'),
+])
+def test_short_time(seconds, expected):
+    assert short_time(seconds) == expected
+
+
+# === get_period_range ===
+TODAY = date(2026, 11, 7)  # суббота
+
+
+@pytest.mark.parametrize('period, offset, expected', [
+    ('week', 0, (date(2026, 11, 2), date(2026, 11, 8))),
+    ('week', -1, (date(2026, 10, 26), date(2026, 11, 1))),
+    ('month', 0, (date(2026, 11, 1), date(2026, 11, 30))),
+    ('month', -10, (date(2026, 1, 1), date(2026, 1, 31))),
+    ('month', -11, (date(2025, 12, 1), date(2025, 12, 31))),
+    ('month', -33, (date(2024, 2, 1), date(2024, 2, 29))),
+    ('year', 0, (date(2026, 1, 1), date(2026, 12, 31))),
+    ('year', -1, (date(2025, 1, 1), date(2025, 12, 31))),
+])
+def test_get_period_range(period, offset, expected):
+    assert get_period_range(period, offset, TODAY) == expected
+
+
+def test_get_period_range_unknown_period():
+    with pytest.raises(ValueError):
+        get_period_range('day', 0, TODAY)
 
 
 # === get_required_xp ===

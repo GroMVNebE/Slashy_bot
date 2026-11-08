@@ -15,6 +15,9 @@ def make_guild(guild_id: int = 10, owner_id: int = 999) -> MagicMock:
     guild.name = 'Тестовый сервер'
     guild.owner_id = owner_id
     guild.owner = MagicMock(spec=discord.Member)
+    # Участники, созданные через make_member с этим сервером, находятся через guild.get_member
+    guild.test_members = {}
+    guild.get_member.side_effect = guild.test_members.get
     return guild
 
 
@@ -34,6 +37,7 @@ def make_member(user_id: int = 1, guild_id: int = 10, display_name: str = 'Те�
     member.voice = MagicMock(spec=discord.VoiceState)
     member.voice.deaf = False
     member.voice.self_deaf = deaf
+    member.guild.test_members[user_id] = member
     return member
 
 
@@ -54,6 +58,7 @@ def make_interaction(user: MagicMock) -> MagicMock:
     interaction.response = MagicMock()
     for method in ('send_message', 'edit_message', 'defer', 'send_modal'):
         setattr(interaction.response, method, AsyncMock())
+    interaction.response.is_done = MagicMock(return_value=False)
     interaction.followup = MagicMock()
     interaction.followup.send = AsyncMock()
     interaction.edit_original_response = AsyncMock()

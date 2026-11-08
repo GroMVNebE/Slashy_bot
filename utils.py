@@ -1,5 +1,6 @@
 import os
 import logging
+from datetime import date, timedelta
 from typing import List, Any, Dict, Literal
 import asyncpg
 import discord
@@ -421,6 +422,59 @@ def readable_time(seconds: int) -> str | Literal['Время не указано
         parts.append(
             f"{seconds} {get_plural(seconds, ('секунда', 'секунды', 'секунд'))}")
     return ' '.join(parts)
+
+
+def short_time(seconds: int) -> str:
+    """### Функция для перевода времени в секундах в короткий формат
+    Используется там, где мало места (пр. подписи столбцов в /voice-top): '12 ч 5 мин', '45 мин', '< 1 мин'
+
+    Args:
+        seconds (int): Время в секундах
+
+    Returns:
+        str: Время в часах и минутах. Секунды отбрасываются
+    """
+    if seconds < 60:
+        return '< 1 мин'
+    hours, minutes = divmod(seconds // 60, 60)
+    if hours == 0:
+        return f'{minutes} мин'
+    if minutes == 0:
+        return f'{hours} ч'
+    return f'{hours} ч {minutes} мин'
+
+
+def get_period_range(period: Literal['week', 'month', 'year'], offset: int, today: date) -> tuple[date, date]:
+    """### Функция для вычисления границ периода статистики
+    Возвращает первый и последний день недели, месяца или года, смещённых относительно текущего
+
+    Args:
+        period (Literal['week', 'month', 'year']): Тип периода
+        offset (int): Смещение в периодах относительно текущего (0 - текущий, -1 - предыдущий)
+        today (date): Текущая дата
+
+    Raises:
+        ValueError: Если передан неизвестный тип периода
+
+    Returns:
+        tuple[date, date]: (первый день периода, последний день периода)
+    """
+    if period == 'week':
+        start = today - timedelta(days=today.weekday()) + timedelta(weeks=offset)
+        return start, start + timedelta(days=6)
+    if period == 'month':
+        # Считаем месяц через общее число месяцев, чтобы смещение могло уходить на любое кол-во лет назад
+        year, month_idx = divmod(today.year * 12 + today.month - 1 + offset, 12)
+        start = date(year, month_idx + 1, 1)
+        if month_idx == 11:
+            end = date(year, 12, 31)
+        else:
+            end = date(year, month_idx + 2, 1) - timedelta(days=1)
+        return start, end
+    if period == 'year':
+        year = today.year + offset
+        return date(year, 1, 1), date(year, 12, 31)
+    raise ValueError(f'Неизвестный тип периода: {period}')
 
 
 VOICE_PEPPER = get_env('VOICE_PEPPER', 'none')
