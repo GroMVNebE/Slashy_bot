@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     guild_id BIGINT,
     only_owner_access BOOLEAN,
     vc_stats_enabled BOOLEAN,
+    anon_stats_enabled BOOLEAN DEFAULT TRUE,
     PRIMARY KEY (guild_id)
 );
 CREATE TABLE IF NOT EXISTS user_settings (
@@ -91,6 +92,27 @@ CREATE TABLE IF NOT EXISTS voice_detailed_sessions (
     end_time TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     seconds INTEGER CHECK (seconds >= 0),
     CONSTRAINT check_timestamp CHECK (end_time > start_time)
+);
+CREATE TABLE IF NOT EXISTS message_length_stats (
+    guild_id BIGINT,
+    day DATE DEFAULT CURRENT_DATE,
+    length INTEGER CHECK (length > 0),
+    count INTEGER DEFAULT 1 CHECK (count > 0),
+    PRIMARY KEY (guild_id, day, length)
+);
+CREATE TABLE IF NOT EXISTS session_duration_stats (
+    guild_id BIGINT,
+    day DATE DEFAULT CURRENT_DATE,
+    minutes INTEGER CHECK (minutes >= 0),
+    count INTEGER DEFAULT 1 CHECK (count > 0),
+    PRIMARY KEY (guild_id, day, minutes)
+);
+CREATE TABLE IF NOT EXISTS command_usage_stats (
+    guild_id BIGINT,
+    day DATE DEFAULT CURRENT_DATE,
+    command TEXT,
+    count INTEGER DEFAULT 1 CHECK (count > 0),
+    PRIMARY KEY (guild_id, day, command)
 );
 """
 
@@ -353,12 +375,13 @@ async def create_default_guild_settings(pool: asyncpg.Pool, guild: discord.Guild
         async with pool.acquire() as con:
             await con.execute(
                 """
-                INSERT INTO guild_settings (guild_id, only_owner_access, vc_stats_enabled)
-                VALUES ($1, $2, $3)
+                INSERT INTO guild_settings (guild_id, only_owner_access, vc_stats_enabled, anon_stats_enabled)
+                VALUES ($1, $2, $3, $4)
             """,
                 guild.id,
                 True,
-                False
+                False,
+                True
             )
     except Exception as e:
         logger.error(
