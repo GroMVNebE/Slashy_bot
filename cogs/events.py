@@ -3,6 +3,7 @@ import discord
 from discord.ext import commands, tasks
 import logging
 from utils import *
+from bot_stats import record_command_usage, record_message_length, record_session_duration
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 from typing import TYPE_CHECKING
@@ -112,10 +113,24 @@ class Events(commands.Cog):
             xp = ATTACHMENT_ONLY_XP
         else:
             xp = _message_curve(len(message.content))
+            await record_message_length(self.bot.db_pool, message.author.guild.id, len(message.content))
         if xp > 0:
             logger.info(
-                f'Начисляется опыт за сообщение (длина: {len(message.content)}, кол-во слов: {len(message.content.split())})')
+                f'Начисляется опыт за сообщение (длина: {len(message.content)})')
             await add_xp(user_id=message.author.id, guild_id=message.author.guild.id, xp=xp, pool=self.bot.db_pool)
+
+    @commands.Cog.listener()
+    async def on_app_command_completion(self, interaction: discord.Interaction, command: discord.app_commands.Command):
+        """### Обработчик успешного выполнения слэш-команды
+        Записывает использование команды в анонимную статистику сервера
+
+        Args:
+            interaction (:class:`discord.Interaction`): Взаимодействие, вызвавшее команду
+            command (:class:`discord.app_commands.Command`): Выполненная команда
+        """
+        if interaction.guild_id is None or not self.bot.db_pool:
+            return
+        await record_command_usage(self.bot.db_pool, interaction.guild_id, command.qualified_name)
 
     async def get_valid_voice_members(self, channel: discord.VoiceChannel | discord.StageChannel, filtered: bool = False) -> list[discord.Member]:
         """### Функция для получения валидных пользователей в голосовом канале
@@ -235,6 +250,7 @@ class Events(commands.Cog):
                 else:
                     logger.info(
                         f'Сохранение информации о сессии (длительность: {ssn_duration} сек.)')
+                    await record_session_duration(self.bot.db_pool, guild_id, ssn_duration // 60)
                     stats_query = """
                     INSERT INTO voice_stats (user_id, guild_id, day, seconds)
                     VALUES ($1, $2, CURRENT_DATE, $3)

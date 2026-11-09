@@ -4,6 +4,7 @@ from discord.ext import commands
 import logging
 from typing import TYPE_CHECKING, Literal
 from utils import *
+from bot_stats import StatsView
 
 # Подлючаем типизацию для класса Bot из launch.py, избегая циклического импорта
 # Нужно для правильного определения типов в IDE
@@ -131,7 +132,9 @@ class ActionSelect(discord.ui.Select):
             discord.SelectOption(
                 label='Выключить бота', description='Прекращает работу бота', value='shutdown', emoji='🛑'),
             discord.SelectOption(label='Перезагрузить модуль',
-                                 description='Перезагружает выбранный ког', value='reload', emoji='⚙️')
+                                 description='Перезагружает выбранный ког', value='reload', emoji='⚙️'),
+            discord.SelectOption(label='Статистика',
+                                 description='Анонимная статистика серверов', value='stats', emoji='📊')
         ]
         # Используем конструктор родительского класса, указывая ограничения
         super().__init__(placeholder='Выберите действие...',
@@ -171,6 +174,15 @@ class ActionSelect(discord.ui.Select):
                 color=discord.Color.blue()
             )
             await interaction.response.edit_message(embed=embed, view=ModuleReloadView(self.bot))
+        # Если нужно посмотреть анонимную статистику
+        elif action == 'stats':
+            logger.info(
+                f'Пользователь {get_info(interaction.user)} открыл анонимную статистику')
+            # Останавливаем панель управления, иначе по её тайм-ауту сообщение со статистикой будет удалено
+            if self.view:
+                self.view.stop()
+            view = await StatsView.create(self.bot, interaction)
+            await view.show(interaction)
 
 
 class ManageView(discord.ui.View):
@@ -214,6 +226,12 @@ server_settings = [
                  {'name': 'Администраторам', 'value': False}]},
     {'code': 'vc_stats_enabled',
      'name': 'Сбор статистики времени "общения"',
+     'type': 'boolean',
+     'choices': [{'name': 'Включен', 'value': True},
+                 {'name': 'Отключен', 'value': False}]
+     },
+    {'code': 'anon_stats_enabled',
+     'name': 'Сбор анонимной статистики (длина сообщений, сессии, команды)',
      'type': 'boolean',
      'choices': [{'name': 'Включен', 'value': True},
                  {'name': 'Отключен', 'value': False}]

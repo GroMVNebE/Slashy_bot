@@ -15,7 +15,8 @@ os.environ['CREATOR_ID'] = '1000'
 
 
 TABLES = ('user_levels', 'guess_number', 'voice_stats', 'guild_settings',
-          'user_settings', 'voice_max_sessions', 'voice_detailed_sessions')
+          'user_settings', 'voice_max_sessions', 'voice_detailed_sessions',
+          'message_length_stats', 'session_duration_stats', 'command_usage_stats')
 
 
 def _db_key(url: str) -> tuple:
@@ -31,6 +32,7 @@ async def db_pool():
     Перед каждым тестом создаёт таблицы и очищает их. Тест пропускается, если TEST_DATABASE_URL не задан"""
     # Импорт utils также загружает .env, откуда берутся TEST_DATABASE_URL и DATABASE_URL
     from utils import setup_database
+    from update import UPDATE_SCHEMA
     test_url = os.getenv('TEST_DATABASE_URL')
     if not test_url:
         pytest.skip('TEST_DATABASE_URL не задан - тесты с БД пропущены')
@@ -42,6 +44,8 @@ async def db_pool():
     pool = await asyncpg.create_pool(dsn=test_url)
     await setup_database(pool)
     async with pool.acquire() as con:
+        # Изменения существующих таблиц из update.py, чтобы тестовая БД совпадала с обновлённой рабочей
+        await con.execute(UPDATE_SCHEMA)
         await con.execute(f'TRUNCATE {", ".join(TABLES)} RESTART IDENTITY')
     yield pool
     await pool.close()
