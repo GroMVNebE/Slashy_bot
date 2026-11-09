@@ -1,4 +1,7 @@
 import os
+import subprocess
+import sys
+from pathlib import Path
 from unittest import mock
 
 import discord
@@ -254,3 +257,26 @@ def test_create_embed_fields_and_no_timestamp():
     assert embed.timestamp is None
     assert [(f.name, f.value, f.inline) for f in embed.fields] == [
         ('Поле', 'Значение', True), ('Поле 2', 'Значение 2', False)]
+
+
+# === Проверка перца при импорте utils ===
+ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize('missing', [
+    pytest.param(['VOICE_PEPPER'], id='no-voice-pepper'),
+    pytest.param(['LOG_PEPPER'], id='no-log-pepper'),
+    pytest.param(['VOICE_PEPPER', 'LOG_PEPPER'], id='no-peppers'),
+])
+def test_import_fails_without_pepper(missing):
+    # Пустое значение: load_dotenv() не перезаписывает заданные переменные, а get_env считает пустую строку незаданной,
+    # поэтому реальный .env не подставит перец. Отдельный процесс - чтобы не сломать уже импортированный utils
+    env = {**os.environ, 'PYTHONIOENCODING': 'utf-8'}
+    for name in missing:
+        env[name] = ''
+    result = subprocess.run([sys.executable, '-c', 'import utils'], cwd=ROOT, env=env,
+                            capture_output=True, encoding='utf-8')
+    assert result.returncode != 0
+    error = result.stderr.strip().splitlines()[-1]
+    assert error.startswith('ValueError')
+    assert f'не найдено значение {", ".join(missing)},' in error

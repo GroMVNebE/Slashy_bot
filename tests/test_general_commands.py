@@ -9,6 +9,7 @@ import pytest
 from cogs.general import General, delete_user_data
 from factories import (count_rows, insert_detailed_session, insert_guild_settings,
                        insert_user_settings, make_interaction, make_member, make_user, sent_kwargs)
+from snapshots import assert_image_matches
 from utils import get_voice_hashes
 
 MSK = ZoneInfo('Europe/Moscow')
@@ -194,6 +195,48 @@ async def test_sessions_buttons(offline_bot):
     await view.today_day.callback(interaction)
     assert view.day_offset == 0
     assert view.update_message.await_count == 32
+
+
+# === /sessions: картинка (снимочные тесты) ===
+class FakeDate(date):
+    """### Дата с фиксированным "сегодня" - 21.10.2026"""
+    @classmethod
+    def today(cls):
+        return cls(2026, 10, 21)
+
+
+async def show_previous_day(view) -> dict:
+    """### Нажимает ⬅️ (20.10.2026) и возвращает аргументы edit_message"""
+    interaction = make_interaction(view.user)
+    await view.prev_day.callback(interaction)
+    return interaction.response.edit_message.call_args.kwargs
+
+
+async def test_sessions_day_snapshot(bot, db_pool, monkeypatch):
+    monkeypatch.setattr('cogs.general.date', FakeDate)
+    day = datetime(2026, 10, 20, tzinfo=MSK)
+    # Сессия через полночь, длинная сессия с подписью времени и короткая без подписи
+    for start, end in ((day - timedelta(hours=1), day + timedelta(hours=1, minutes=30)),
+                       (day + timedelta(hours=10), day + timedelta(hours=13, minutes=15)),
+                       (day + timedelta(hours=18), day + timedelta(hours=18, minutes=20))):
+        await insert_detailed_session(db_pool, 1, 10, start, end)
+    await insert_detailed_session(db_pool, 2, 10, day + timedelta(hours=5), day + timedelta(hours=8))
+
+    view = sessions_view(bot, make_member(1, 10, display_name='Тестер Снимков'))
+    kwargs = await show_previous_day(view)
+    # За день: 1 ч 30 мин + 3 ч 15 мин + 20 мин (сессия другого пользователя не учитывается)
+    assert '**Дата:** 20.10.2026' in kwargs['embed'].description
+    assert '**Всего за день:** 5.08 ч. (5 часов 5 минут)' in kwargs['embed'].description
+    assert_image_matches(kwargs['attachments'][0].fp.getvalue(), 'sessions_day')
+
+
+async def test_sessions_disabled_snapshot(bot, db_pool, monkeypatch):
+    monkeypatch.setattr('cogs.general.date', FakeDate)
+    view = sessions_view(bot, make_member(1, 10, display_name='Тестер Снимков'))
+    view.collection_warning = '**Сбор детальных сессий "общения"** отключен. Включить его можно в `/setup`'
+    kwargs = await show_previous_day(view)
+    assert kwargs['embed'].fields[0].name == '⚠️ Сбор сессий отключен'
+    assert_image_matches(kwargs['attachments'][0].fp.getvalue(), 'sessions_disabled')
 
 
 # === /sessions: команда ===

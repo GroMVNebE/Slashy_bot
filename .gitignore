@@ -216,3 +216,5 @@ rules.docx
 CLAUDE.md
 .claude
 .vscode
+# Картинки упавших снимочных тестов
+tests/snapshots/failed/

@@ -502,11 +502,13 @@ def get_period_range(period: Literal['week', 'month', 'year'], offset: int, toda
 
 VOICE_PEPPER = get_env('VOICE_PEPPER', 'none')
 LOG_PEPPER = get_env('LOG_PEPPER', 'none')
-if VOICE_PEPPER == 'none' or LOG_PEPPER == 'none':
+_missing_peppers = [name for name, value in (('VOICE_PEPPER', VOICE_PEPPER), ('LOG_PEPPER', LOG_PEPPER))
+                    if value == 'none']
+if _missing_peppers:
     logger.critical(
-        f'В .env не найдено значение {"VOICE_PEPPER" if VOICE_PEPPER == "none" else "LOG_PEPPER"}, используемое для защиты пользовательских данных. Продолжение работы невозможно из-за нарушения безопасности')
+        f'В .env не найдено значение {", ".join(_missing_peppers)}, используемое для защиты пользовательских данных. Продолжение работы невозможно из-за нарушения безопасности')
     raise ValueError(
-        f'Ошибка! В .env не найдено значение {"VOICE_PEPPER" if LOG_PEPPER == "none" else "LOG_PEPPER"}, необходимое для защиты пользовательских данных')
+        f'Ошибка! В .env не найдено значение {", ".join(_missing_peppers)}, необходимое для защиты пользовательских данных')
 
 
 def hash_data(data: list[dict], category: Literal['voice', 'log']) -> str:
