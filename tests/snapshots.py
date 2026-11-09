@@ -1,18 +1,21 @@
 """### Снимочные (snapshot) тесты картинок
-Картинка сравнивается с эталоном из tests/snapshots/<name>.png с допуском: размер должен совпадать точно,
-а средняя разница пикселей - не превышать порог (сглаживание шрифтов на другой ОС не роняет тест,
-а сдвинутый текст, другие цифры или цвета - роняют).
+Картинка сравнивается с эталоном из tests/snapshots/<ОС>/<name>.png с допуском: размер должен совпадать точно,
+а средняя разница пикселей и доля заметно изменённых пикселей - не превышать порог.
+Эталоны хранятся отдельно для каждой ОС (win32, linux): шрифты на разных ОС отрисовываются немного по-разному.
 
-Создать или обновить эталоны: `UPDATE_SNAPSHOTS=1 pytest ...` (каждый новый эталон нужно проверить глазами)"""
+Создать или обновить эталоны: `UPDATE_SNAPSHOTS=1 pytest ...` (каждый новый эталон нужно проверить глазами).
+Если эталона для текущей ОС нет (пр. в GitHub Actions на Linux), тест падает, а картинка сохраняется в
+tests/snapshots/failed/ - её можно скачать из артефактов запуска, проверить и положить в папку нужной ОС"""
 import io
 import os
+import sys
 from pathlib import Path
 
 import pytest
 from PIL import Image, ImageChops, ImageStat
 
-SNAPSHOTS_DIR = Path(__file__).parent / 'snapshots'
-FAILED_DIR = SNAPSHOTS_DIR / 'failed'
+SNAPSHOTS_DIR = Path(__file__).parent / 'snapshots' / sys.platform
+FAILED_DIR = Path(__file__).parent / 'snapshots' / 'failed'
 
 
 CHANGED_PIXEL_THRESHOLD = 64
@@ -49,23 +52,25 @@ def assert_image_matches(png: bytes | io.BytesIO, name: str, max_mean_diff: floa
     data = png.getvalue() if isinstance(png, io.BytesIO) else png
     snapshot = SNAPSHOTS_DIR / f'{name}.png'
     if os.getenv('UPDATE_SNAPSHOTS') == '1':
-        SNAPSHOTS_DIR.mkdir(exist_ok=True)
+        SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
         snapshot.write_bytes(data)
         return
-    if not snapshot.exists():
-        pytest.fail(f'Нет эталона {snapshot}. Создайте его через UPDATE_SNAPSHOTS=1 и проверьте глазами')
 
-    actual = Image.open(io.BytesIO(data))
-    expected = Image.open(snapshot)
     problem = None
-    if actual.size != expected.size:
-        problem = f'размер {actual.size} вместо {expected.size}'
+    if not snapshot.exists():
+        problem = (f'нет эталона для {sys.platform}. Проверьте сохранённую картинку глазами и положите её в '
+                   f'{SNAPSHOTS_DIR} (или создайте эталоны через UPDATE_SNAPSHOTS=1)')
     else:
-        mean_diff, changed_ratio = get_diff_stats(actual, expected)
-        if mean_diff > max_mean_diff:
-            problem = f'средняя разница пикселей {mean_diff:.2f} > {max_mean_diff}'
-        elif changed_ratio > max_changed_ratio:
-            problem = f'изменено {changed_ratio:.3%} пикселей > {max_changed_ratio:.3%}'
+        actual = Image.open(io.BytesIO(data))
+        expected = Image.open(snapshot)
+        if actual.size != expected.size:
+            problem = f'размер {actual.size} вместо {expected.size}'
+        else:
+            mean_diff, changed_ratio = get_diff_stats(actual, expected)
+            if mean_diff > max_mean_diff:
+                problem = f'средняя разница пикселей {mean_diff:.2f} > {max_mean_diff}'
+            elif changed_ratio > max_changed_ratio:
+                problem = f'изменено {changed_ratio:.3%} пикселей > {max_changed_ratio:.3%}'
     if problem:
         FAILED_DIR.mkdir(parents=True, exist_ok=True)
         (FAILED_DIR / f'{name}.png').write_bytes(data)

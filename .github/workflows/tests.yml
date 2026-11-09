@@ -41,3 +41,13 @@ jobs:
 
       - name: Тесты
         run: pytest -v
+
+      # Фактические картинки упавших снимочных тестов, в том числе новые эталоны для Linux:
+      # их нужно скачать со страницы запуска, проверить глазами и положить в tests/snapshots/linux/
+      - name: Картинки упавших снимочных тестов
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-snapshots
+          path: tests/snapshots/failed/
+          if-no-files-found: ignore
