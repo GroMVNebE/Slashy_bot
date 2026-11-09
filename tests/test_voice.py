@@ -2,6 +2,7 @@ from datetime import date
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
+from PIL import Image
 import pytest
 
 from cogs.general import General
@@ -188,6 +189,59 @@ async def test_stats_buttons():
     assert view.set_max_ssn.style == discord.ButtonStyle.primary
     assert view.set_total.style == discord.ButtonStyle.secondary
     assert view.update_stats.await_count == 3
+
+
+PERIOD_BUTTONS = ('set_week', 'set_month', 'set_year')
+
+
+@pytest.mark.parametrize('button, period', [('set_week', 'week'), ('set_month', 'month'), ('set_year', 'year')])
+async def test_stats_period_buttons(button, period):
+    view = stats_view(MagicMock())
+    view.update_stats = AsyncMock()
+    view.current_period, view.offset = 'month' if period != 'month' else 'week', -3
+    await getattr(view, button).callback(make_interaction(view.user))
+    assert (view.current_period, view.offset) == (period, 0)
+    # Подсвечена только кнопка выбранного периода, ➡️ снова неактивна
+    for other in PERIOD_BUTTONS:
+        expected = discord.ButtonStyle.primary if other == button else discord.ButtonStyle.secondary
+        assert getattr(view, other).style == expected
+    assert view.next_period.disabled is True
+    view.update_stats.assert_awaited_once()
+
+
+async def test_stats_total_button():
+    view = stats_view(MagicMock())
+    view.update_stats = AsyncMock()
+    view.mode = 'max_ssn'
+    await view.set_total.callback(make_interaction(view.user))
+    assert view.mode == 'total'
+    assert view.set_total.style == discord.ButtonStyle.primary
+    assert view.set_max_ssn.style == discord.ButtonStyle.secondary
+
+
+@pytest.mark.parametrize('button', ['period_fill', 'mode_fill'])
+async def test_stats_filler_buttons(button):
+    view = stats_view(MagicMock())
+    view.update_stats = AsyncMock()
+    assert getattr(view, button).disabled is True
+    await getattr(view, button).callback(make_interaction(view.user))
+    view.update_stats.assert_not_awaited()
+
+
+# === generate_plot для года ===
+MONTHS = ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"]
+
+
+@pytest.mark.parametrize('mode, values', [
+    pytest.param('total', [1.5, 0, 12, 40.25, 0, 3, 7, 0, 0, 22.5, 1, 0], id='total'),
+    pytest.param('max_ssn', [0.5, 2, 30.5, 26, 0, 1, 4, 0, 0, 8, 1, 0], id='max-sessions-over-24h'),
+    pytest.param('total', [0] * 12, id='empty'),
+])
+def test_generate_plot_year(mode, values):
+    view = General.VoiceStatsView.__new__(General.VoiceStatsView)
+    view.current_period, view.mode = 'year', mode
+    image = Image.open(view.generate_plot(MONTHS, values, '01.01.2026 — 31.12.2026'))
+    assert image.format == 'PNG'
 
 
 # === update_stats ===

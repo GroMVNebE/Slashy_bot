@@ -122,6 +122,45 @@ async def test_voice_single_member_not_tracked(events_cog, db_pool):
     assert events_cog.active_sessions == {}
 
 
+async def set_deaf(events_cog, member, channel, deaf: bool):
+    """### Участник в канале channel отключает (deaf=True) или включает звук"""
+    member.voice.self_deaf = deaf
+    await events_cog.on_voice_state_update(
+        member, make_voice_state(channel, deaf=not deaf), make_voice_state(channel, deaf=deaf))
+
+
+async def test_voice_deafen_and_undeafen(events_cog, db_pool):
+    await insert_guild_settings(db_pool, 10)
+    guild = make_guild(10)
+    first, second = make_member(1, guild=guild), make_member(2, guild=guild)
+    channel = make_voice_channel([first, second], guild)
+    await events_cog.on_voice_state_update(second, make_voice_state(None), make_voice_state(channel))
+    session_start = events_cog.active_sessions[1]['session_start']
+
+    # Звук отключил один из двоих - "общаться" не с кем, сессии обоих уходят в ожидание
+    await set_deaf(events_cog, second, channel, True)
+    assert events_cog.active_sessions == {}
+    assert set(events_cog.pending_sessions) == {1, 2}
+
+    # Звук снова включён - сессии восстанавливаются, а не начинаются заново
+    await set_deaf(events_cog, second, channel, False)
+    assert set(events_cog.active_sessions) == {1, 2}
+    assert events_cog.pending_sessions == {}
+    assert events_cog.active_sessions[1]['session_start'] == session_start
+
+
+async def test_voice_deafen_with_others_remaining(events_cog, db_pool):
+    await insert_guild_settings(db_pool, 10)
+    guild = make_guild(10)
+    members = [make_member(user_id, guild=guild) for user_id in (1, 2, 3)]
+    channel = make_voice_channel(members, guild)
+    await events_cog.on_voice_state_update(members[2], make_voice_state(None), make_voice_state(channel))
+
+    await set_deaf(events_cog, members[2], channel, True)
+    assert set(events_cog.active_sessions) == {1, 2}
+    assert set(events_cog.pending_sessions) == {3}
+
+
 async def test_voice_bot_ignored(events_cog):
     guild = make_guild(10)
     bot_member = make_member(2, guild=guild, bot=True)
